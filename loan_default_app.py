@@ -7,7 +7,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.base import BaseEstimator, TransformerMixin
 import io
-import plotly.graph_objects as go
 
 # ===== Configuration =====
 MODEL_PATH = 'loan_default_model.pkl'
@@ -198,27 +197,29 @@ def process_batch_data(uploaded_file, artifacts, threshold):
     return None
 
 def create_gauge_chart(probability, threshold):
-    """Create a gauge chart visualization"""
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=probability * 100,
-        domain={'x': [0, 1], 'y': [0, 1]},
-        title={'text': "Default Probability (%)"},
-        gauge={
-            'axis': {'range': [0, 100]},
-            'bar': {'color': "darkblue"},
-            'steps': [
-                {'range': [0, threshold*100], 'color': "lightgreen"},
-                {'range': [threshold*100, 100], 'color': "lightcoral"}
-            ],
-            'threshold': {
-                'line': {'color': "red", 'width': 4},
-                'thickness': 0.75,
-                'value': threshold*100
-            }
-        }
-    ))
-    fig.update_layout(height=300)
+    """Create a matplotlib gauge chart"""
+    fig, ax = plt.subplots(figsize=(8, 3))
+    
+    # Create gauge
+    ax.barh(['Risk'], [1], color='lightgreen', height=0.3)
+    ax.barh(['Risk'], [probability], color='orange', height=0.3)
+    
+    # Add threshold line
+    ax.axvline(x=threshold, color='red', linestyle='--', linewidth=2)
+    
+    # Add text
+    ax.text(threshold, 0.35, f'Threshold: {threshold:.0%}', 
+            color='red', ha='center', va='bottom')
+    ax.text(probability, 0.15, f'{probability:.1%}', 
+            color='black', ha='center', va='center', fontsize=12)
+    
+    # Set limits and labels
+    ax.set_xlim(0, 1)
+    ax.set_xticks(np.arange(0, 1.1, 0.1))
+    ax.set_xticklabels([f'{x:.0%}' for x in np.arange(0, 1.1, 0.1)])
+    ax.set_title('Default Probability Gauge')
+    ax.grid(True, alpha=0.3)
+    
     return fig
 
 def create_probability_comparison(prob_default):
@@ -333,7 +334,7 @@ def main():
                 
                 # Gauge chart
                 with col1:
-                    st.plotly_chart(create_gauge_chart(prob_default, threshold), use_container_width=True)
+                    st.pyplot(create_gauge_chart(prob_default, threshold))
                 
                 # Probability comparison
                 with col2:
@@ -463,6 +464,5 @@ if __name__ == "__main__":
     
     # Add visualization imports
     import matplotlib.pyplot as plt
-    import plotly.graph_objects as go
     
     main()
