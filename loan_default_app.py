@@ -3,13 +3,19 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
+import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.base import BaseEstimator, TransformerMixin
 import io
+import plotly.graph_objects as go
 
 # ===== Configuration =====
 MODEL_PATH = 'loan_default_model.pkl'
 PREPROCESSOR_PATH = 'preprocessor.pkl'
-DEFAULT_THRESHOLD = 0.2
+DEFAULT_THRESHOLD = 0.5
+DEVELOPER_NAME = "Your Name"  # Replace with your name
+MODEL_VERSION = "1.0"
+MODEL_TRAIN_DATE = "2023-10-15"
 
 # Feature definitions
 NUMERICAL_FEATURES = [
@@ -175,9 +181,11 @@ def process_batch_data(uploaded_file, artifacts, threshold):
         probabilities = predict_default_probability(df[FEATURES_ORDER], artifacts)
         
         if probabilities is not None:
+            # Convert probabilities to Python floats
+            probabilities = probabilities.astype(float)
+            
             # Add predictions to DataFrame
-            # FIX: Convert probabilities to Python floats
-            df['Default_Probability'] = probabilities.astype(float)
+            df['Default_Probability'] = probabilities
             df['Risk_Classification'] = np.where(
                 probabilities >= threshold, 
                 "High Risk", 
@@ -188,6 +196,52 @@ def process_batch_data(uploaded_file, artifacts, threshold):
         st.error(f"Error processing file: {str(e)}")
     
     return None
+
+def create_gauge_chart(probability, threshold):
+    """Create a gauge chart visualization"""
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=probability * 100,
+        domain={'x': [0, 1], 'y': [0, 1]},
+        title={'text': "Default Probability (%)"},
+        gauge={
+            'axis': {'range': [0, 100]},
+            'bar': {'color': "darkblue"},
+            'steps': [
+                {'range': [0, threshold*100], 'color': "lightgreen"},
+                {'range': [threshold*100, 100], 'color': "lightcoral"}
+            ],
+            'threshold': {
+                'line': {'color': "red", 'width': 4},
+                'thickness': 0.75,
+                'value': threshold*100
+            }
+        }
+    ))
+    fig.update_layout(height=300)
+    return fig
+
+def create_probability_comparison(prob_default):
+    """Create probability comparison chart"""
+    fig, ax = plt.subplots(figsize=(8, 3))
+    plt.barh(['Default', 'No Default'], [prob_default, 1 - prob_default], 
+             color=['#ff7f0e', '#1f77b4'])
+    plt.xlim(0, 1)
+    plt.title('Probability Comparison')
+    plt.xlabel('Probability')
+    plt.grid(axis='x', linestyle='--', alpha=0.7)
+    return fig
+
+def create_threshold_comparison(prob_default, threshold):
+    """Create threshold comparison visualization"""
+    fig, ax = plt.subplots(figsize=(10, 2))
+    ax.barh(['Probability'], [prob_default], color='#ff7f0e')
+    ax.axvline(x=threshold, color='r', linestyle='--', label=f'Threshold ({threshold:.0%})')
+    ax.set_xlim(0, 1)
+    ax.set_title('Probability vs Threshold')
+    ax.legend(loc='lower right')
+    ax.grid(axis='x', linestyle='--', alpha=0.7)
+    return fig
 
 # ===== Main App =====
 def main():
@@ -200,22 +254,50 @@ def main():
     # Load artifacts
     artifacts = load_artifacts()
     
-    # App title
-    st.title("Loan Default Risk Assessment")
-    st.markdown("""
-    This application predicts the probability of loan applicants defaulting. 
-    Use the single application form or upload a CSV for batch processing.
-    """)
+    # Developer and model info in sidebar
+    st.sidebar.header("Developer & Model Information")
+    st.sidebar.markdown(f"**Developer:** {DEVELOPER_NAME}")
+    st.sidebar.markdown(f"**Model:** XGBoost Classifier")
+    st.sidebar.markdown(f"**Version:** {MODEL_VERSION}")
+    st.sidebar.markdown(f"**Trained on:** {MODEL_TRAIN_DATE}")
+    st.sidebar.markdown("**Features:**")
+    st.sidebar.markdown("- Numerical: Age, Income, Loan Amount, etc.")
+    st.sidebar.markdown("- Categorical: Education, Employment Type, etc.")
+    st.sidebar.markdown("---")
     
-    # Threshold selection
+    # Threshold selection with explanation
+    st.sidebar.subheader("Risk Threshold Configuration")
     threshold = st.sidebar.slider(
         "Classification Threshold", 
         min_value=0.0, 
         max_value=1.0, 
         value=DEFAULT_THRESHOLD,
         step=0.01,
-        help="Higher values reduce false positives but increase false negatives"
+        help=(
+            "Set the probability threshold for classifying applicants as high risk.\n\n"
+            "Higher values reduce false positives (classifying good applicants as risky) "
+            "but increase false negatives (missing actual risky applicants).\n\n"
+            "Default is 0.5 (50% probability)."
+        )
     )
+    
+    # Risk level explanation
+    st.sidebar.markdown("### Threshold Guidance")
+    st.sidebar.markdown("""
+    - **Conservative (0.3-0.4)**: Flag more applicants as risky
+    - **Balanced (0.5)**: Equal weight to both error types
+    - **Aggressive (0.6-0.7)**: Only flag high-confidence risks
+    """)
+    
+    # App title with model info
+    st.title("Loan Default Risk Assessment")
+    st.markdown(f"""
+    **Developer:** {DEVELOPER_NAME} | **Model Version:** {MODEL_VERSION} | **Trained:** {MODEL_TRAIN_DATE}
+    
+    This application predicts the probability of loan applicants defaulting using an XGBoost classifier. 
+    The model was trained on historical loan data with 16 features including financial, employment, 
+    and personal information.
+    """)
     
     # Create tabs
     tab1, tab2 = st.tabs(["Single Application", "Batch Processing"])
@@ -229,37 +311,80 @@ def main():
             probabilities = predict_default_probability(input_df, artifacts)
             
             if probabilities is not None:
-                # FIX: Convert numpy float32 to Python float
+                # Convert numpy float32 to Python float
                 prob_default = float(probabilities[0])
-                prediction = "High Risk" if prob_default >= threshold else "Low Risk"
+                prob_no_default = 1 - prob_default
+                
+                # Determine classification
+                is_high_risk = prob_default >= threshold
+                prediction = "High Risk" if is_high_risk else "Low Risk"
                 
                 # Display results
                 st.subheader("Prediction Results")
                 
                 # Create columns for metrics
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Probability of Default", f"{prob_default:.2%}")
+                col2.metric("Probability of No Default", f"{prob_no_default:.2%}")
+                col3.metric("Risk Classification", prediction)
+                
+                # Visualization row
                 col1, col2 = st.columns(2)
-                col1.metric("Default Probability", f"{prob_default:.2%}")
-                col2.metric("Risk Classification", prediction)
                 
-                # Fixed progress bar with explicit float conversion
-                st.write(f"Risk Score: {prob_default:.2%}")
-                st.progress(prob_default)
+                # Gauge chart
+                with col1:
+                    st.plotly_chart(create_gauge_chart(prob_default, threshold), use_container_width=True)
                 
-                # Risk explanation
-                if prob_default >= threshold:
-                    st.warning("⚠️ This applicant is classified as high risk")
-                    st.markdown("**Recommendation:** Consider additional verification or decline application")
+                # Probability comparison
+                with col2:
+                    st.pyplot(create_probability_comparison(prob_default))
+                
+                # Threshold comparison
+                st.pyplot(create_threshold_comparison(prob_default, threshold))
+                
+                # Risk explanation with improved logic
+                if is_high_risk:
+                    risk_level = "⚠️ HIGH RISK ⚠️"
+                    explanation = (
+                        "This applicant has a higher probability of defaulting on the loan based on their profile. "
+                        "The predicted probability of default exceeds your current threshold."
+                    )
+                    recommendation = (
+                        "**Recommendation:**\n"
+                        "- Request additional financial documentation\n"
+                        "- Consider a co-signer requirement\n"
+                        "- Increase interest rate to offset risk\n"
+                        "- Decline application if risk tolerance is exceeded"
+                    )
+                    st.error(risk_level)
                 else:
-                    st.success("✅ This applicant is classified as low risk")
-                    st.markdown("**Recommendation:** Application meets risk criteria for approval")
+                    risk_level = "✅ LOW RISK ✅"
+                    explanation = (
+                        "This applicant has a lower probability of defaulting on the loan based on their profile. "
+                        "The predicted probability of default is below your current threshold."
+                    )
+                    recommendation = (
+                        "**Recommendation:**\n"
+                        "- Approve application\n"
+                        "- Consider standard interest rates\n"
+                        "- May qualify for premium loan products"
+                    )
+                    st.success(risk_level)
                 
-                # Threshold explanation
+                st.markdown(f"**Explanation:** {explanation}")
+                st.markdown(recommendation)
+                
+                # Threshold analysis
+                st.subheader("Threshold Analysis")
                 st.markdown(f"""
-                **Threshold Information:**
-                - Current classification threshold: {threshold:.0%}
-                - Applicant's risk score: {prob_default:.2%}
-                - Margin: {(prob_default - threshold):.2%} 
+                - Current classification threshold: **{threshold:.0%}**
+                - Applicant's default probability: **{prob_default:.2%}**
+                - Margin: **{(prob_default - threshold):.2%}** 
                 """)
+                
+                # Show how close to threshold
+                if abs(prob_default - threshold) < 0.1:
+                    st.warning("This applicant is close to the threshold. Consider additional review.")
 
     with tab2:
         st.subheader("Batch Processing")
@@ -278,16 +403,54 @@ def main():
                 results_df = process_batch_data(uploaded_file, artifacts, threshold)
             
             if results_df is not None:
-                st.success("Predictions completed successfully!")
+                st.success(f"Processed {len(results_df)} applications successfully!")
                 
-                # Show results
-                st.subheader("Prediction Results")
-                st.dataframe(results_df)
+                # Calculate risk distribution
+                risk_counts = results_df['Risk_Classification'].value_counts()
+                st.subheader("Risk Distribution")
+                
+                # Create columns for metrics and chart
+                col1, col2 = st.columns([1, 2])
+                
+                with col1:
+                    st.metric("High Risk Applicants", len(results_df[results_df['Risk_Classification'] == "High Risk"]))
+                    st.metric("Low Risk Applicants", len(results_df[results_df['Risk_Classification'] == "Low Risk"]))
+                    st.metric("Average Default Probability", f"{results_df['Default_Probability'].mean():.2%}")
+                
+                with col2:
+                    # Pie chart of risk distribution
+                    fig, ax = plt.subplots()
+                    ax.pie(risk_counts, labels=risk_counts.index, autopct='%1.1f%%',
+                           colors=['#ff7f0e', '#1f77b4'], startangle=90)
+                    ax.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle.
+                    st.pyplot(fig)
+                
+                # Show high risk applicants first
+                high_risk_df = results_df[results_df['Risk_Classification'] == "High Risk"]
+                low_risk_df = results_df[results_df['Risk_Classification'] == "Low Risk"]
+                
+                # Show results with tabs
+                risk_tab1, risk_tab2 = st.tabs([
+                    f"High Risk Applicants ({len(high_risk_df)})", 
+                    f"Low Risk Applicants ({len(low_risk_df)})"
+                ])
+                
+                with risk_tab1:
+                    if len(high_risk_df) > 0:
+                        st.dataframe(high_risk_df.sort_values('Default_Probability', ascending=False))
+                    else:
+                        st.info("No high risk applicants found")
+                
+                with risk_tab2:
+                    if len(low_risk_df) > 0:
+                        st.dataframe(low_risk_df.sort_values('Default_Probability', ascending=True))
+                    else:
+                        st.info("No low risk applicants found")
                 
                 # Download button
                 csv = results_df.to_csv(index=False).encode('utf-8')
                 st.download_button(
-                    label="Download Results",
+                    label="Download Full Results",
                     data=csv,
                     file_name='loan_predictions.csv',
                     mime='text/csv'
@@ -297,5 +460,9 @@ if __name__ == "__main__":
     # Add necessary imports that are used in the Preprocessor
     from sklearn.compose import ColumnTransformer
     from sklearn.preprocessing import OneHotEncoder, StandardScaler, OrdinalEncoder
+    
+    # Add visualization imports
+    import matplotlib.pyplot as plt
+    import plotly.graph_objects as go
     
     main()
