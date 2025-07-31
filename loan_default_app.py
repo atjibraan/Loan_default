@@ -14,7 +14,7 @@ PREPROCESSOR_PATH = 'preprocessor.pkl'
 DEFAULT_THRESHOLD = 0.5
 DEVELOPER_NAME = "Jibraan Attar"  # Replace with your name
 MODEL_VERSION = "1.0"
-MODEL_TRAIN_DATE = "2023-10-15"
+MODEL_TRAIN_DATE = "2025-07-29"
 
 # Feature definitions
 NUMERICAL_FEATURES = [
@@ -112,7 +112,7 @@ def get_user_input():
         col1, col2, col3 = st.columns(3)
         education = col1.selectbox("Education", ["High School", "Bachelor's", "Master's", "PhD"])
         employment_type = col2.selectbox("Employment Type", ["Full-time", "Part-time", "Self-employed", "Unemployed"])
-        loan_purpose = col3.selectbox("Loan Purpose", ["Business", "Home", "Education", "Personal", "Auto"])
+        loan_purpose = col3.selectbox("Loan Purpose", ["Business", "Home", "Education", "Auto"])
         
         # Binary features
         st.subheader("Personal Information")
