@@ -1,15 +1,12 @@
-# Core dependencies
-streamlit==1.31.1
-pandas==2.2.1
-numpy==1.26.4
-joblib==1.3.2
-scikit-learn==1.4.2
-matplotlib==3.8.3
-seaborn==0.13.2
+streamlit==1.34.0
+pandas==2.2.2
+numpy>=1.26.0
+scikit-learn==1.6.1
 xgboost==2.0.3
+joblib>=1.2.0
+imbalanced-learn>=0.12.0
+matplotlib==3.8.4
+seaborn>=0.13.0
+cloudpickle>=3.0.0
+shap==0.45.0
 
-# Visualization libraries
-plotly==5.20.0
-
-# Optional but recommended for performance
-pyarrow==15.0.2
