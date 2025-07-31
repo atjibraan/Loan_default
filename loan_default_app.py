@@ -12,7 +12,7 @@ import io
 MODEL_PATH = 'loan_default_model.pkl'
 PREPROCESSOR_PATH = 'preprocessor.pkl'
 DEFAULT_THRESHOLD = 0.5
-DEVELOPER_NAME = "Your Name"  # Replace with your name
+DEVELOPER_NAME = "Jibraan Attar"  # Replace with your name
 MODEL_VERSION = "1.0"
 MODEL_TRAIN_DATE = "2023-10-15"
 
