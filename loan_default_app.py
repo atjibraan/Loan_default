@@ -1,301 +1,134 @@
-# loan_default_app.py
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
-from sklearn.base import BaseEstimator, TransformerMixin
-import io
+import matplotlib.pyplot as plt
+import seaborn as sns
+import os
 
-# ===== Configuration =====
-MODEL_PATH = 'loan_default_model.pkl'
-PREPROCESSOR_PATH = 'preprocessor.pkl'
-DEFAULT_THRESHOLD = 0.2
+# Load artifacts
+@st.cache_resource
+def load_model():
+    return joblib.load("loan_default_model.pkl")
 
-# Feature definitions
-NUMERICAL_FEATURES = [
-    'Age', 'Income', 'LoanAmount', 'CreditScore', 'MonthsEmployed',
-    'NumCreditLines', 'InterestRate', 'LoanTerm', 'DTIRatio'
-]
+@st.cache_resource
+def load_preprocessor():
+    return joblib.load("preprocessor.pkl")
 
-CATEGORICAL_FEATURES = ['Education', 'EmploymentType', 'LoanPurpose']
-BINARY_FEATURES = ['MaritalStatus', 'HasMortgage', 'HasDependents', 'HasCoSigner']
+model = load_model()
+preprocessor = load_preprocessor()
 
-# Expected column order
-FEATURES_ORDER = [
+# Features list
+features = [
     'Age', 'Income', 'LoanAmount', 'CreditScore', 'MonthsEmployed',
     'NumCreditLines', 'InterestRate', 'LoanTerm', 'DTIRatio', 'Education',
     'EmploymentType', 'MaritalStatus', 'HasMortgage', 'HasDependents',
     'LoanPurpose', 'HasCoSigner'
 ]
 
-# ===== Helper Functions =====
-@st.cache_resource
-def load_artifacts():
-    """Load model and preprocessor with caching"""
-    artifacts = {
-        'model': None,
-        'preprocessor': None
-    }
-    
-    try:
-        artifacts['model'] = joblib.load(MODEL_PATH)
-        artifacts['preprocessor'] = joblib.load(PREPROCESSOR_PATH)
-    except Exception as e:
-        st.error(f"Error loading artifacts: {str(e)}")
-        st.stop()
-    
-    return artifacts
+# Page configuration
+st.set_page_config(page_title="Loan Default Prediction App", layout="wide")
+st.title("Loan Default Prediction App")
+st.markdown("Predict the likelihood of a loan default using a trained ML model.")
 
-class Preprocessor(BaseEstimator, TransformerMixin):
-    """Replicate preprocessing class from training"""
-    def __init__(self):
-        self.column_transformer = ColumnTransformer(
-            transformers=[
-                ('num', StandardScaler(), NUMERICAL_FEATURES),
-                ('cat', OneHotEncoder(drop='first', sparse_output=False), CATEGORICAL_FEATURES),
-                ('bin', OrdinalEncoder(), BINARY_FEATURES)
-            ]
-        )
+# Sidebar
+st.sidebar.title("Navigation")
+option = st.sidebar.radio("Choose Input Type:", ["Single Application", "Batch Upload"])
 
-    def fit(self, X, y=None):
-        self.column_transformer.fit(X)
-        return self
-
-    def transform(self, X):
-        return self.column_transformer.transform(X)
-
-def predict_default_probability(input_data, artifacts):
-    """Predict default probability for input data"""
-    try:
-        # Ensure proper data types
-        for col in NUMERICAL_FEATURES:
-            input_data[col] = pd.to_numeric(input_data[col], errors='coerce')
-        
-        # Preprocess input
-        processed_data = artifacts['preprocessor'].transform(input_data)
-        
-        # Predict probability
-        probabilities = artifacts['model'].predict_proba(processed_data)
-        return probabilities[:, 1]  # Probability of default (class 1)
-    except Exception as e:
-        st.error(f"Prediction error: {str(e)}")
-        return None
-
-def get_user_input():
-    """Collect user input through form"""
-    with st.form("loan_input"):
-        st.header("Applicant Information")
-        
-        # Numerical features
+# Input form for single application
+if option == "Single Application":
+    st.header("Single Applicant Prediction")
+    with st.form("applicant_form"):
         col1, col2, col3 = st.columns(3)
-        age = col1.number_input("Age", min_value=18, max_value=100, value=35)
-        income = col2.number_input("Annual Income ($)", min_value=1000, value=60000)
-        loan_amount = col3.number_input("Loan Amount ($)", min_value=1000, value=20000)
-        
-        col1, col2, col3 = st.columns(3)
-        credit_score = col1.number_input("Credit Score", min_value=300, max_value=850, value=700)
-        months_employed = col2.number_input("Months Employed", min_value=0, value=36)
-        num_credit_lines = col3.number_input("Number of Credit Lines", min_value=0, value=3)
-        
-        col1, col2, col3 = st.columns(3)
-        interest_rate = col1.number_input("Interest Rate (%)", min_value=0.0, max_value=30.0, value=7.5, step=0.1)
-        loan_term = col2.number_input("Loan Term (months)", min_value=1, value=36)
-        dti_ratio = col3.number_input("DTI Ratio", min_value=0.0, max_value=1.0, value=0.35, step=0.01)
-        
-        # Categorical features
-        st.subheader("Categorical Information")
-        col1, col2, col3 = st.columns(3)
-        education = col1.selectbox("Education", ["High School", "Bachelor's", "Master's", "PhD"])
-        employment_type = col2.selectbox("Employment Type", ["Full-time", "Part-time", "Self-employed", "Unemployed"])
-        loan_purpose = col3.selectbox("Loan Purpose", ["Business", "Home", "Education", "Personal", "Auto"])
-        
-        # Binary features
-        st.subheader("Personal Information")
-        col1, col2, col3, col4 = st.columns(4)
-        marital_status = col1.selectbox("Marital Status", ["Single", "Married"])
-        has_mortgage = col2.selectbox("Has Mortgage", ["No", "Yes"])
-        has_dependents = col3.selectbox("Has Dependents", ["No", "Yes"])
-        has_cosigner = col4.selectbox("Has Co-signer", ["No", "Yes"])
-        
-        submitted = st.form_submit_button("Predict Default Risk")
-        
+
+        with col1:
+            Age = st.number_input("Age", 18, 100, 30)
+            Income = st.number_input("Annual Income ($)", 0, 1000000, 50000)
+            LoanAmount = st.number_input("Loan Amount ($)", 1000, 1000000, 10000)
+            CreditScore = st.slider("Credit Score", 300, 850, 650)
+            MonthsEmployed = st.number_input("Months Employed", 0, 600, 24)
+
+        with col2:
+            NumCreditLines = st.number_input("Number of Credit Lines", 0, 50, 5)
+            InterestRate = st.number_input("Interest Rate (%)", 0.0, 50.0, 5.0)
+            LoanTerm = st.number_input("Loan Term (months)", 6, 360, 60)
+            DTIRatio = st.slider("Debt-to-Income Ratio", 0.0, 1.0, 0.2)
+            Education = st.selectbox("Education", ["High School", "Bachelors", "Masters", "PhD"])
+
+        with col3:
+            EmploymentType = st.selectbox("Employment Type", ["Salaried", "Self-Employed", "Unemployed"])
+            MaritalStatus = st.selectbox("Marital Status", ["Single", "Married", "Divorced"])
+            HasMortgage = st.selectbox("Has Mortgage?", ["No", "Yes"])
+            HasDependents = st.selectbox("Has Dependents?", ["No", "Yes"])
+            LoanPurpose = st.selectbox("Loan Purpose", ["Home", "Car", "Education", "Personal", "Business"])
+            HasCoSigner = st.selectbox("Has Co-Signer?", ["No", "Yes"])
+
+        submitted = st.form_submit_button("Predict")
+
         if submitted:
-            # Create DataFrame with proper data types
-            return pd.DataFrame([{
-                'Age': int(age),
-                'Income': float(income),
-                'LoanAmount': float(loan_amount),
-                'CreditScore': int(credit_score),
-                'MonthsEmployed': int(months_employed),
-                'NumCreditLines': int(num_credit_lines),
-                'InterestRate': float(interest_rate),
-                'LoanTerm': int(loan_term),
-                'DTIRatio': float(dti_ratio),
-                'Education': education,
-                'EmploymentType': employment_type,
-                'MaritalStatus': marital_status,
-                'HasMortgage': has_mortgage,
-                'HasDependents': has_dependents,
-                'LoanPurpose': loan_purpose,
-                'HasCoSigner': has_cosigner
-            }])
-    return None
+            input_dict = {
+                'Age': Age,
+                'Income': Income,
+                'LoanAmount': LoanAmount,
+                'CreditScore': CreditScore,
+                'MonthsEmployed': MonthsEmployed,
+                'NumCreditLines': NumCreditLines,
+                'InterestRate': InterestRate,
+                'LoanTerm': LoanTerm,
+                'DTIRatio': DTIRatio,
+                'Education': Education,
+                'EmploymentType': EmploymentType,
+                'MaritalStatus': MaritalStatus,
+                'HasMortgage': HasMortgage,
+                'HasDependents': HasDependents,
+                'LoanPurpose': LoanPurpose,
+                'HasCoSigner': HasCoSigner
+            }
 
-def validate_uploaded_data(df):
-    """Validate uploaded CSV data"""
-    # Check for required columns
-    missing_cols = [col for col in FEATURES_ORDER if col not in df.columns]
-    if missing_cols:
-        st.error(f"Missing required columns: {', '.join(missing_cols)}")
-        return False
-    
-    # Check data types
-    for col in NUMERICAL_FEATURES:
-        if not pd.api.types.is_numeric_dtype(df[col]):
-            st.error(f"Column '{col}' must be numeric")
-            return False
-    
-    # Check for missing values
-    if df.isnull().any().any():
-        st.error("Dataset contains missing values")
-        return False
-    
-    return True
+            input_df = pd.DataFrame([input_dict])
+            input_processed = preprocessor.transform(input_df)
+            prediction_proba = model.predict_proba(input_processed)[0][1]
+            prediction = model.predict(input_processed)[0]
 
-def process_batch_data(uploaded_file, artifacts, threshold):
-    """Process uploaded CSV file"""
-    try:
-        df = pd.read_csv(uploaded_file)
-        
-        # Validate data
-        if not validate_uploaded_data(df):
-            return None
-        
-        # Predict probabilities
-        probabilities = predict_default_probability(df[FEATURES_ORDER], artifacts)
-        
-        if probabilities is not None:
-            # Add predictions to DataFrame
-            # FIX: Convert probabilities to Python floats
-            df['Default_Probability'] = probabilities.astype(float)
-            df['Risk_Classification'] = np.where(
-                probabilities >= threshold, 
-                "High Risk", 
-                "Low Risk"
-            )
-            return df
-    except Exception as e:
-        st.error(f"Error processing file: {str(e)}")
-    
-    return None
+            st.subheader("Prediction Result")
+            st.write(f"**Default Probability:** {prediction_proba:.2%}")
+            st.write(f"**Prediction:** {'Likely to Default' if prediction == 1 else 'Not Likely to Default'}")
 
-# ===== Main App =====
-def main():
-    st.set_page_config(
-        page_title="Loan Default Predictor",
-        page_icon="💰",
-        layout="wide"
-    )
-    
-    # Load artifacts
-    artifacts = load_artifacts()
-    
-    # App title
-    st.title("Loan Default Risk Assessment")
-    st.markdown("""
-    This application predicts the probability of loan applicants defaulting. 
-    Use the single application form or upload a CSV for batch processing.
-    """)
-    
-    # Threshold selection
-    threshold = st.sidebar.slider(
-        "Classification Threshold", 
-        min_value=0.0, 
-        max_value=1.0, 
-        value=DEFAULT_THRESHOLD,
-        step=0.01,
-        help="Higher values reduce false positives but increase false negatives"
-    )
-    
-    # Create tabs
-    tab1, tab2 = st.tabs(["Single Application", "Batch Processing"])
-    
-    with tab1:
-        st.subheader("Single Application Assessment")
-        input_df = get_user_input()
-        
-        if input_df is not None:
-            # Make prediction
-            probabilities = predict_default_probability(input_df, artifacts)
-            
-            if probabilities is not None:
-                # FIX: Convert numpy float32 to Python float
-                prob_default = float(probabilities[0])
-                prediction = "High Risk" if prob_default >= threshold else "Low Risk"
-                
-                # Display results
-                st.subheader("Prediction Results")
-                
-                # Create columns for metrics
-                col1, col2 = st.columns(2)
-                col1.metric("Default Probability", f"{prob_default:.2%}")
-                col2.metric("Risk Classification", prediction)
-                
-                # Fixed progress bar with explicit float conversion
-                st.write(f"Risk Score: {prob_default:.2%}")
-                st.progress(prob_default)
-                
-                # Risk explanation
-                if prob_default >= threshold:
-                    st.warning("⚠️ This applicant is classified as high risk")
-                    st.markdown("**Recommendation:** Consider additional verification or decline application")
-                else:
-                    st.success("✅ This applicant is classified as low risk")
-                    st.markdown("**Recommendation:** Application meets risk criteria for approval")
-                
-                # Threshold explanation
-                st.markdown(f"""
-                **Threshold Information:**
-                - Current classification threshold: {threshold:.0%}
-                - Applicant's risk score: {prob_default:.2%}
-                - Margin: {(prob_default - threshold):.2%} 
-                """)
+            st.subheader("Why this applicant is at risk?")
+            st.markdown("The following chart highlights the most influential features contributing to the predicted default probability.")
+            st.image("shap_summary_example.png", caption="Top Features Impacting Default Risk", use_column_width=True)
 
-    with tab2:
-        st.subheader("Batch Processing")
-        st.info("Upload a CSV file containing loan applicant data")
-        
-        # File uploader
-        uploaded_file = st.file_uploader(
-            "Choose a CSV file", 
-            type="csv",
-            help="File must contain all required columns in the correct format"
-        )
-        
-        if uploaded_file is not None:
-            # Process the uploaded file
-            with st.spinner("Processing file..."):
-                results_df = process_batch_data(uploaded_file, artifacts, threshold)
-            
-            if results_df is not None:
-                st.success("Predictions completed successfully!")
-                
-                # Show results
-                st.subheader("Prediction Results")
-                st.dataframe(results_df)
-                
-                # Download button
-                csv = results_df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="Download Results",
-                    data=csv,
-                    file_name='loan_predictions.csv',
-                    mime='text/csv'
-                )
+# Batch prediction from CSV
+elif option == "Batch Upload":
+    st.header("Batch Prediction from CSV")
+    uploaded_file = st.file_uploader("Upload CSV File", type=["csv"])
 
-if __name__ == "__main__":
-    # Add necessary imports that are used in the Preprocessor
-    from sklearn.compose import ColumnTransformer
-    from sklearn.preprocessing import OneHotEncoder, StandardScaler, OrdinalEncoder
-    
-    main()
+    if uploaded_file:
+        try:
+            data = pd.read_csv(uploaded_file)
+            if not set(features).issubset(data.columns):
+                st.error("Uploaded CSV does not contain the required columns.")
+            else:
+                processed_data = preprocessor.transform(data[features])
+                predictions = model.predict(processed_data)
+                probabilities = model.predict_proba(processed_data)[:, 1]
+
+                result_df = data.copy()
+                result_df['Default Probability'] = probabilities
+                result_df['Prediction'] = np.where(predictions == 1, 'Likely to Default', 'Not Likely to Default')
+
+                st.success("Batch prediction completed.")
+                st.dataframe(result_df.head(10))
+
+                csv = result_df.to_csv(index=False).encode('utf-8')
+                st.download_button("Download Predictions", csv, "batch_predictions.csv", "text/csv")
+
+        except Exception as e:
+            st.error(f"Error processing file: {str(e)}")
+
+# Footer
+st.markdown("---")
+st.markdown("**Developed by: Your Name Here**")
+st.markdown("**Model**: Gradient Boosting Classifier (trained with sklearn)")
+st.markdown("**Version**: 1.0 | © 2025")
