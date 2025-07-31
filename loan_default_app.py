@@ -151,7 +151,7 @@ def validate_uploaded_data(df):
     
     # Check data types
     for col in NUMERICAL_FEATURES:
-        if not np.issubdtype(df[col].dtype, np.number):
+        if not pd.api.types.is_numeric_dtype(df[col]):
             st.error(f"Column '{col}' must be numeric")
             return False
     
@@ -239,8 +239,9 @@ def main():
                 col1.metric("Default Probability", f"{prob_default:.2%}")
                 col2.metric("Risk Classification", prediction)
                 
-                # Progress bar visualization
-                st.progress(prob_default, text=f"Risk Score: {prob_default:.2%}")
+                # FIXED: Proper progress bar implementation
+                st.write(f"Risk Score: {prob_default:.2%}")
+                st.progress(float(prob_default))
                 
                 # Risk explanation
                 if prob_default >= threshold:
