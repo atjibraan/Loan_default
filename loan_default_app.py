@@ -2,87 +2,131 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
-from xgboost import XGBClassifier
+import os
 import matplotlib.pyplot as plt
+import seaborn as sns
 
-# Load model and preprocessor
-model = joblib.load("loan_default_model.pkl")
-preprocessor = joblib.load("preprocessor.pkl")
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.preprocessing import StandardScaler, OneHotEncoder, OrdinalEncoder
+from sklearn.compose import ColumnTransformer
 
-# Feature lists (must match training script)
-numerical_features = [
-    'Age', 'Income', 'LoanAmount', 'CreditScore', 'MonthsEmployed',
-    'NumCreditLines', 'InterestRate', 'LoanTerm', 'DTIRatio'
-]
+# =============================
+# Embedded Preprocessor Class
+# =============================
+class Preprocessor(BaseEstimator, TransformerMixin):
+    def __init__(self):
+        self.num_cols = [
+            'Age', 'Income', 'LoanAmount', 'CreditScore', 'MonthsEmployed',
+            'NumCreditLines', 'InterestRate', 'LoanTerm', 'DTIRatio'
+        ]
+        self.cat_cols_onehot = ['Education', 'EmploymentType', 'LoanPurpose']
+        self.cat_cols_ordinal = ['MaritalStatus']
+        self.binary_cols = ['HasMortgage', 'HasDependents', 'HasCoSigner']
 
-categorical_features = ['Education', 'EmploymentType', 'LoanPurpose']
-binary_features = ['MaritalStatus', 'HasMortgage', 'HasDependents', 'HasCoSigner']
+        self.ordinal_mapping = [['Single', 'Married', 'Divorced', 'Widowed']]
+        self.scaler = StandardScaler()
+        self.onehot = OneHotEncoder(handle_unknown='ignore', sparse=False)
+        self.ordinal = OrdinalEncoder(categories=self.ordinal_mapping)
+        self.pipeline = None
 
-all_features = numerical_features + categorical_features + binary_features
+    def fit(self, X, y=None):
+        transformers = [
+            ('num', self.scaler, self.num_cols),
+            ('onehot', self.onehot, self.cat_cols_onehot),
+            ('ordinal', self.ordinal, self.cat_cols_ordinal)
+        ]
+        self.pipeline = ColumnTransformer(transformers, remainder='passthrough')
+        self.pipeline.fit(X)
+        return self
 
-# UI title
-st.title("Loan Default Prediction App")
-st.markdown("Predict the likelihood of a customer defaulting on a loan. Powered by XGBoost.")
+    def transform(self, X):
+        return self.pipeline.transform(X)
 
-# Tabs for real-time input and CSV upload
-tab1, tab2 = st.tabs(["🔍 Real-Time Prediction", "📂 Batch Prediction via CSV"])
+# =============================
+# Load Model and Setup
+# =============================
+@st.cache_resource
+def load_model():
+    model = joblib.load('loan_default_model.pkl')
+    return model
 
-with tab1:
-    st.subheader("Enter Customer Details")
-    input_data = {}
+model = load_model()
+preprocessor = Preprocessor()
 
-    for col in numerical_features:
-        input_data[col] = st.number_input(f"{col}", value=0.0, step=1.0)
+# =============================
+# UI Layout
+# =============================
+st.set_page_config(page_title="Loan Default Predictor", layout="centered")
+st.title("💸 Loan Default Prediction App")
 
-    for col in categorical_features:
-        input_data[col] = st.selectbox(f"{col}", options=["High School", "Graduate", "Post-Graduate"] if col == "Education"
-                                       else ["Salaried", "Self-Employed", "Unemployed"] if col == "EmploymentType"
-                                       else ["Personal", "Business", "Education", "Home", "Other"])
+st.markdown("""
+This app predicts whether a loan will default based on applicant and loan details.
+- Model: `XGBoost`
+- Preprocessing: Embedded (no separate file needed)
+""")
 
-    for col in binary_features:
-        input_data[col] = st.selectbox(f"{col}", options=["No", "Yes"])
+# =============================
+# User Input
+# =============================
+st.subheader("🔍 Enter Applicant Details")
 
-    if st.button("Predict Default"):
-        input_df = pd.DataFrame([input_data])
-        preprocessed = preprocessor.transform(input_df)
-        probability = model.predict_proba(preprocessed)[0, 1]
-        prediction = model.predict(preprocessed)[0]
+with st.expander("🧍 Predict One Applicant"):
+    def user_input():
+        data = {
+            'Age': st.number_input('Age', 18, 100, 30),
+            'Income': st.number_input('Income', 1000, 1000000, 50000),
+            'LoanAmount': st.number_input('Loan Amount', 500, 500000, 10000),
+            'CreditScore': st.slider('Credit Score', 300, 850, 700),
+            'MonthsEmployed': st.number_input('Months Employed', 0, 600, 24),
+            'NumCreditLines': st.number_input('Number of Credit Lines', 1, 20, 5),
+            'InterestRate': st.slider('Interest Rate (%)', 1.0, 50.0, 10.0),
+            'LoanTerm': st.number_input('Loan Term (months)', 6, 360, 60),
+            'DTIRatio': st.slider('Debt-to-Income Ratio', 0.0, 2.0, 0.3),
+            'Education': st.selectbox('Education', ['High School', 'Bachelors', 'Masters', 'PhD']),
+            'EmploymentType': st.selectbox('Employment Type', ['Salaried', 'Self-Employed', 'Unemployed']),
+            'MaritalStatus': st.selectbox('Marital Status', ['Single', 'Married', 'Divorced', 'Widowed']),
+            'HasMortgage': st.radio('Has Mortgage?', ['Yes', 'No']) == 'Yes',
+            'HasDependents': st.radio('Has Dependents?', ['Yes', 'No']) == 'Yes',
+            'LoanPurpose': st.selectbox('Loan Purpose', ['Home', 'Car', 'Education', 'Business', 'Other']),
+            'HasCoSigner': st.radio('Has Co-Signer?', ['Yes', 'No']) == 'Yes'
+        }
+        return pd.DataFrame([data])
+    
+    input_df = user_input()
 
-        st.markdown(f"### 📊 Prediction: {'Default' if prediction == 1 else 'No Default'}")
-        st.markdown(f"### 💡 Probability of Default: {probability:.2%}")
+    if st.button("Predict Default (Single Entry)"):
+        preprocessor.fit(input_df)
+        transformed = preprocessor.transform(input_df)
+        prediction = model.predict(transformed)[0]
+        st.success(f"Prediction: {'🔴 Default' if prediction else '🟢 No Default'}")
 
-with tab2:
-    st.subheader("Upload CSV File")
-    uploaded_file = st.file_uploader("Upload a CSV file with customer data", type=["csv"])
+# =============================
+# CSV Upload Section
+# =============================
+st.subheader("📂 Predict in Bulk with CSV Upload")
+
+with st.expander("📁 Upload CSV for Batch Prediction"):
+    uploaded_file = st.file_uploader("Upload CSV with 16 columns", type=['csv'])
 
     if uploaded_file:
+        batch_df = pd.read_csv(uploaded_file)
         try:
-            df = pd.read_csv(uploaded_file)
+            preprocessor.fit(batch_df)
+            transformed_batch = preprocessor.transform(batch_df)
+            predictions = model.predict(transformed_batch)
+            batch_df['Prediction'] = np.where(predictions == 1, 'Default', 'No Default')
+            st.write(batch_df)
 
-            missing_cols = [col for col in all_features if col not in df.columns]
-            if missing_cols:
-                st.error(f"Missing required columns: {missing_cols}")
-            else:
-                processed = preprocessor.transform(df)
-                preds = model.predict(processed)
-                probs = model.predict_proba(processed)[:, 1]
-
-                df['Prediction'] = np.where(preds == 1, 'Default', 'No Default')
-                df['Probability'] = probs
-
-                st.success("Predictions completed.")
-                st.dataframe(df[['Prediction', 'Probability'] + all_features])
-
-                # Download option
-                csv_out = df.to_csv(index=False).encode('utf-8')
-                st.download_button("Download Predictions", data=csv_out, file_name="loan_predictions.csv", mime="text/csv")
-
+            fig, ax = plt.subplots()
+            sns.countplot(x='Prediction', data=batch_df, ax=ax, palette='pastel')
+            st.pyplot(fig)
         except Exception as e:
-            st.error(f"Error processing file: {str(e)}")
+            st.error(f"Prediction failed: {e}")
 
-# Footer
-st.markdown("---")
-st.caption("Developed using Streamlit and XGBoost | © 2025")
+# =============================
+# Legal Disclaimer
+# =============================
+st.caption("⚠️ This tool is for demonstration purposes only. Do not use for actual financial decisions.")
 
 
 
