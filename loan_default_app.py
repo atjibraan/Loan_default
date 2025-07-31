@@ -176,7 +176,8 @@ def process_batch_data(uploaded_file, artifacts, threshold):
         
         if probabilities is not None:
             # Add predictions to DataFrame
-            df['Default_Probability'] = probabilities
+            # FIX: Convert probabilities to Python floats
+            df['Default_Probability'] = probabilities.astype(float)
             df['Risk_Classification'] = np.where(
                 probabilities >= threshold, 
                 "High Risk", 
@@ -228,7 +229,8 @@ def main():
             probabilities = predict_default_probability(input_df, artifacts)
             
             if probabilities is not None:
-                prob_default = probabilities[0]
+                # FIX: Convert numpy float32 to Python float
+                prob_default = float(probabilities[0])
                 prediction = "High Risk" if prob_default >= threshold else "Low Risk"
                 
                 # Display results
@@ -239,9 +241,9 @@ def main():
                 col1.metric("Default Probability", f"{prob_default:.2%}")
                 col2.metric("Risk Classification", prediction)
                 
-                # FIXED: Proper progress bar implementation
+                # Fixed progress bar with explicit float conversion
                 st.write(f"Risk Score: {prob_default:.2%}")
-                st.progress(float(prob_default))
+                st.progress(prob_default)
                 
                 # Risk explanation
                 if prob_default >= threshold:
@@ -297,4 +299,3 @@ if __name__ == "__main__":
     from sklearn.preprocessing import OneHotEncoder, StandardScaler, OrdinalEncoder
     
     main()
-
