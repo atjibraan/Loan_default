@@ -4,8 +4,8 @@ This is a Streamlit web app that predicts the likelihood of a loan applicant def
 
 ## 🚀 Demo
 
-Try the app live (hosted on [Streamlit Cloud](https://streamlit.io/) or [Hugging Face Spaces](https://huggingface.co/spaces)):  
-🔗 [Live App](https://your-app-link)
+Try the app live (hosted on [Streamlit Cloud](https://streamlit.io/)  
+🔗 [Live App](https://loandefault-fsevxgxwbtrm7gevfzcgfe.streamlit.app/)
 
 ---
 
