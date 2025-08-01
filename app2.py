@@ -13,10 +13,10 @@ from sklearn.base import BaseEstimator, TransformerMixin
 # ===== Configuration =====
 MODEL_PATH = 'loan_default_model.pkl'
 PREPROCESSOR_PATH = 'preprocessor.pkl'
-DEVELOPER_NAME = "Your Name"  # Replace with your name
-MODEL_VERSION = "1.0"
-MODEL_TRAIN_DATE = "2023-10-15"
-MAX_CSV_ROWS = 1000  # Limit for batch processing
+DEVELOPER_NAME = "Jibraan Attar"  # Replace with your name
+MODEL_VERSION = "2.0"
+MODEL_TRAIN_DATE = "2025-08-1"
+MAX_CSV_ROWS = 100000  # Limit for batch processing
 MAX_FILE_SIZE_MB = 25  # Increased to 25MB
 
 # Feature definitions
