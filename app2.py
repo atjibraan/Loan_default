@@ -501,4 +501,4 @@ if __name__ == "__main__":
             st.error(str(e))
             st.code(traceback.format_exc())
         st.stop()
-can we add shap interpretability in this by mainataiining the original working if yes provide me the new fully working script with that feature
+
