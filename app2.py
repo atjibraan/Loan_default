@@ -16,7 +16,7 @@ PREPROCESSOR_PATH = 'preprocessor.pkl'
 DEVELOPER_NAME = "Jibraan Attar"  # Replace with your name
 MODEL_VERSION = "2.0"
 MODEL_TRAIN_DATE = "2025-08-1"
-MAX_CSV_ROWS = 100000  # Limit for batch processing
+MAX_CSV_ROWS = 2000000  # Limit for batch processing
 MAX_FILE_SIZE_MB = 25  # Increased to 25MB
 
 # Feature definitions
