@@ -17,6 +17,7 @@ DEVELOPER_NAME = "Your Name"  # Replace with your name
 MODEL_VERSION = "1.0"
 MODEL_TRAIN_DATE = "2023-10-15"
 MAX_CSV_ROWS = 1000  # Limit for batch processing
+MAX_FILE_SIZE_MB = 25  # Increased to 25MB
 
 # Feature definitions
 NUMERICAL_FEATURES = [
@@ -215,8 +216,8 @@ def process_batch_data(uploaded_file, artifacts):
     try:
         # Check file size
         file_size = len(uploaded_file.getvalue()) / (1024 * 1024)  # MB
-        if file_size > 5:
-            st.error("File size too large (max 5MB)")
+        if file_size > MAX_FILE_SIZE_MB:
+            st.error(f"File size too large (max {MAX_FILE_SIZE_MB}MB)")
             return None
         
         # Read with row limit
@@ -316,6 +317,13 @@ def main():
     This threshold is fixed based on model optimization.
     """)
     
+    # File size info
+    st.sidebar.subheader("Batch Processing")
+    st.sidebar.markdown(f"""
+    - Max file size: **{MAX_FILE_SIZE_MB}MB**
+    - Max rows processed: **{MAX_CSV_ROWS}**
+    """)
+    
     # App title with model info
     st.title("Loan Default Risk Assessment")
     st.markdown(f"""
@@ -404,16 +412,20 @@ def main():
 
     with tab2:
         st.subheader("Batch Processing")
-        st.info("Upload a CSV file containing loan applicant data")
+        st.info(f"Upload a CSV file containing loan applicant data (max {MAX_FILE_SIZE_MB}MB)")
         
         # File uploader
         uploaded_file = st.file_uploader(
             "Choose a CSV file", 
             type="csv",
-            help="File must contain all required columns in the correct format"
+            help=f"File must contain all required columns and be less than {MAX_FILE_SIZE_MB}MB"
         )
         
         if uploaded_file is not None:
+            # Show file info
+            file_size = len(uploaded_file.getvalue()) / (1024 * 1024)  # MB
+            st.info(f"Uploaded file: {uploaded_file.name} ({file_size:.2f}MB)")
+            
             # Process the uploaded file
             with st.spinner("Processing file..."):
                 results_df = process_batch_data(uploaded_file, artifacts)
