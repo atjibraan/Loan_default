@@ -156,7 +156,7 @@ def get_user_input():
         col1, col2, col3 = st.columns(3)
         education = col1.selectbox("Education", ["High School", "Bachelor's", "Master's", "PhD"])
         employment_type = col2.selectbox("Employment Type", ["Full-time", "Part-time", "Self-employed", "Unemployed"])
-        loan_purpose = col3.selectbox("Loan Purpose", ["Business", "Home", "Education", "Personal", "Auto"])
+        loan_purpose = col3.selectbox("Loan Purpose", ["Business", "Home", "Education","Auto"])
         
         # Binary features
         st.subheader("Personal Information")
