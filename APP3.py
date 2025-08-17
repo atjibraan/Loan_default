@@ -1,4 +1,4 @@
-# APP3.py (Loan Default Predictor with Monitoring + Logs Tab + Preprocessor Fix)
+# APP3.py (Loan Default Predictor with Monitoring + Logs Tab + Correct Preprocessor)
 
 import streamlit as st
 import pandas as pd
@@ -6,7 +6,6 @@ import numpy as np
 import joblib
 import matplotlib.pyplot as plt
 import os
-import sys
 import traceback
 from datetime import datetime
 import logging
@@ -14,8 +13,6 @@ import logging
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import StandardScaler, OneHotEncoder, OrdinalEncoder
 from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
-from imblearn.pipeline import Pipeline as ImbPipeline
 from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import RandomUnderSampler
 
@@ -42,7 +39,7 @@ CATEGORICAL_FEATURES = ['Education', 'EmploymentType', 'LoanPurpose']
 BINARY_FEATURES = ['MaritalStatus', 'HasMortgage', 'HasDependents', 'HasCoSigner']
 FEATURES_ORDER = NUMERICAL_FEATURES + CATEGORICAL_FEATURES + BINARY_FEATURES
 
-# ===== Custom Hybrid Resampler =====
+# ===== Hybrid Resampler =====
 class HybridResampler(BaseEstimator, TransformerMixin):
     def __init__(self, sampling_strategy=0.5, random_state=42):
         self.sampling_strategy = sampling_strategy
@@ -55,31 +52,30 @@ class HybridResampler(BaseEstimator, TransformerMixin):
         X_res, y_res = self.under.fit_resample(X_res, y_res)
         return X_res, y_res
 
-# ===== Custom Preprocessor =====
+# ===== Correct Preprocessor =====
 class Preprocessor(BaseEstimator, TransformerMixin):
     def __init__(self):
         self.num_features = NUMERICAL_FEATURES
         self.cat_features = CATEGORICAL_FEATURES
         self.bin_features = BINARY_FEATURES
-
         self.num_transformer = StandardScaler()
-        self.cat_transformer = OneHotEncoder(handle_unknown='ignore')
+        self.cat_transformer = OneHotEncoder(handle_unknown="ignore")
         self.bin_transformer = OrdinalEncoder()
-
-        self.preprocessor = ColumnTransformer(
-            transformers=[
-                ('num', self.num_transformer, self.num_features),
-                ('cat', self.cat_transformer, self.cat_features),
-                ('bin', self.bin_transformer, self.bin_features)
-            ]
-        )
+        self.column_transformer = None   # built in fit()
 
     def fit(self, X, y=None):
-        self.preprocessor.fit(X, y)
+        self.column_transformer = ColumnTransformer(
+            transformers=[
+                ("num", self.num_transformer, self.num_features),
+                ("cat", self.cat_transformer, self.cat_features),
+                ("bin", self.bin_transformer, self.bin_features),
+            ]
+        )
+        self.column_transformer.fit(X, y)
         return self
 
     def transform(self, X):
-        return self.preprocessor.transform(X)
+        return self.column_transformer.transform(X)
 
 # ===== Logging Setup =====
 os.makedirs("logs", exist_ok=True)
@@ -90,11 +86,9 @@ logging.basicConfig(
 )
 
 def log_prediction(input_data, prediction):
-    """Log each prediction"""
     logging.info(f"Input: {input_data.to_dict(orient='records') if isinstance(input_data, pd.DataFrame) else input_data}, Prediction: {prediction}")
 
 def generate_drift_report(reference_data, new_data, report_name="drift_report"):
-    """Generate and save drift report with Evidently"""
     try:
         report = Report(metrics=[DataDriftPreset()])
         report.run(reference_data=reference_data, current_data=new_data)
@@ -192,7 +186,6 @@ def view_logs():
         with open(log_file, "r") as f:
             logs = f.read()
         st.text_area("Logs", logs, height=400)
-        # Download button
         with open(log_file, "rb") as f:
             st.download_button("Download Logs", f, file_name="predictions.log")
     else:
