@@ -1,4 +1,5 @@
-# APP3.py
+# APP3.py (Loan Default Predictor with Monitoring + Logs Tab)
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -17,7 +18,7 @@ from evidently.metric_preset import DataDriftPreset
 # ===== Configuration =====
 MODEL_PATH = 'loan_default_model.pkl'
 PREPROCESSOR_PATH = 'preprocessor.pkl'
-REFERENCE_DATA_PATH = "X_train.csv"   # store your training data here
+REFERENCE_DATA_PATH = "X_train.csv"
 DEVELOPER_NAME = "Jibraan Attar"
 MODEL_VERSION = "2.0"
 MODEL_TRAIN_DATE = "2025-07-29"
@@ -58,28 +59,6 @@ def generate_drift_report(reference_data, new_data, report_name="drift_report"):
     except Exception as e:
         logging.error(f"Error generating drift report: {str(e)}")
         return None
-
-# ===== Add Preprocessor Class (Fix for joblib load) =====
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder, StandardScaler, OrdinalEncoder
-
-class Preprocessor(BaseEstimator, TransformerMixin):
-    """Custom Preprocessor used during training"""
-    def __init__(self):
-        self.column_transformer = ColumnTransformer(
-            transformers=[
-                ('num', StandardScaler(), NUMERICAL_FEATURES),
-                ('cat', OneHotEncoder(drop='first', sparse_output=False), CATEGORICAL_FEATURES),
-                ('bin', OrdinalEncoder(), BINARY_FEATURES)
-            ]
-        )
-
-    def fit(self, X, y=None):
-        self.column_transformer.fit(X)
-        return self
-
-    def transform(self, X):
-        return self.column_transformer.transform(X)
 
 # ===== File Validation =====
 if not os.path.exists(MODEL_PATH):
@@ -159,13 +138,27 @@ def process_batch_data(uploaded_file, artifacts):
         return df
     return None
 
+# ===== Logs Viewer =====
+def view_logs():
+    st.subheader("Prediction Logs")
+    log_file = "logs/predictions.log"
+    if os.path.exists(log_file):
+        with open(log_file, "r") as f:
+            logs = f.read()
+        st.text_area("Logs", logs, height=400)
+        # Download button
+        with open(log_file, "rb") as f:
+            st.download_button("Download Logs", f, file_name="predictions.log")
+    else:
+        st.info("No logs found yet.")
+
 # ===== Main App =====
 def main():
     st.set_page_config(page_title="Loan Default Predictor", page_icon="💰", layout="wide")
     artifacts = load_artifacts()
     st.title("Loan Default Risk Assessment with Monitoring")
 
-    tab1, tab2 = st.tabs(["Single Application", "Batch Processing"])
+    tab1, tab2, tab3 = st.tabs(["Single Application", "Batch Processing", "Logs"])
     
     with tab1:
         input_df = get_user_input()
@@ -196,6 +189,9 @@ def main():
                     with open(report_path, "rb") as f:
                         st.download_button("Download Batch Drift Report", f, file_name=os.path.basename(report_path))
                 st.dataframe(results_df.head())
+
+    with tab3:
+        view_logs()
 
 if __name__ == "__main__":
     try:
