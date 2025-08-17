@@ -1,4 +1,4 @@
-# APP3.py (Loan Default Predictor with Monitoring + Logs Tab)
+# APP3.py (Loan Default Predictor with Monitoring + Logs Tab + Preprocessor Fix)
 
 import streamlit as st
 import pandas as pd
@@ -9,7 +9,15 @@ import os
 import sys
 import traceback
 from datetime import datetime
+import logging
+
 from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.preprocessing import StandardScaler, OneHotEncoder, OrdinalEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from imblearn.pipeline import Pipeline as ImbPipeline
+from imblearn.over_sampling import SMOTE
+from imblearn.under_sampling import RandomUnderSampler
 
 # Evidently for monitoring
 from evidently.report import Report
@@ -34,9 +42,47 @@ CATEGORICAL_FEATURES = ['Education', 'EmploymentType', 'LoanPurpose']
 BINARY_FEATURES = ['MaritalStatus', 'HasMortgage', 'HasDependents', 'HasCoSigner']
 FEATURES_ORDER = NUMERICAL_FEATURES + CATEGORICAL_FEATURES + BINARY_FEATURES
 
+# ===== Custom Hybrid Resampler =====
+class HybridResampler(BaseEstimator, TransformerMixin):
+    def __init__(self, sampling_strategy=0.5, random_state=42):
+        self.sampling_strategy = sampling_strategy
+        self.random_state = random_state
+        self.smote = SMOTE(sampling_strategy=self.sampling_strategy, random_state=self.random_state)
+        self.under = RandomUnderSampler(sampling_strategy=0.8, random_state=self.random_state)
+
+    def fit_resample(self, X, y):
+        X_res, y_res = self.smote.fit_resample(X, y)
+        X_res, y_res = self.under.fit_resample(X_res, y_res)
+        return X_res, y_res
+
+# ===== Custom Preprocessor =====
+class Preprocessor(BaseEstimator, TransformerMixin):
+    def __init__(self):
+        self.num_features = NUMERICAL_FEATURES
+        self.cat_features = CATEGORICAL_FEATURES
+        self.bin_features = BINARY_FEATURES
+
+        self.num_transformer = StandardScaler()
+        self.cat_transformer = OneHotEncoder(handle_unknown='ignore')
+        self.bin_transformer = OrdinalEncoder()
+
+        self.preprocessor = ColumnTransformer(
+            transformers=[
+                ('num', self.num_transformer, self.num_features),
+                ('cat', self.cat_transformer, self.cat_features),
+                ('bin', self.bin_transformer, self.bin_features)
+            ]
+        )
+
+    def fit(self, X, y=None):
+        self.preprocessor.fit(X, y)
+        return self
+
+    def transform(self, X):
+        return self.preprocessor.transform(X)
+
 # ===== Logging Setup =====
 os.makedirs("logs", exist_ok=True)
-import logging
 logging.basicConfig(
     filename="logs/predictions.log",
     level=logging.INFO,
