@@ -17,7 +17,7 @@ from evidently.metric_preset import DataDriftPreset
 # ===== Configuration =====
 MODEL_PATH = 'loan_default_model.pkl'
 PREPROCESSOR_PATH = 'preprocessor.pkl'
-REFERENCE_DATA_PATH = "X_train.csv"
+REFERENCE_DATA_PATH = "X_train.csv"   # store your training data here
 DEVELOPER_NAME = "Jibraan Attar"
 MODEL_VERSION = "2.0"
 MODEL_TRAIN_DATE = "2025-07-29"
@@ -62,11 +62,12 @@ def generate_drift_report(reference_data, new_data, report_name="drift_report"):
         logging.error(f"Error generating drift report: {str(e)}")
         return None
 
-# ===== Add Preprocessor Class (Fix for joblib load) =====
+# ===== Add Preprocessor Class =====
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler, OrdinalEncoder
 
 class Preprocessor(BaseEstimator, TransformerMixin):
+    """Custom Preprocessor used during training"""
     def __init__(self):
         self.column_transformer = ColumnTransformer(
             transformers=[
@@ -97,11 +98,17 @@ if not os.path.exists(REFERENCE_DATA_PATH):
 # ===== Helper Functions =====
 @st.cache_resource
 def load_artifacts():
-    return {
+    reference_data = pd.read_csv(REFERENCE_DATA_PATH)
+
+    # ✅ Keep only valid feature columns (drop LoanID, Unnamed: 0, Default, etc.)
+    reference_data = reference_data[[col for col in FEATURES_ORDER if col in reference_data.columns]]
+
+    artifacts = {
         'model': joblib.load(MODEL_PATH),
         'preprocessor': joblib.load(PREPROCESSOR_PATH),
-        'reference_data': pd.read_csv(REFERENCE_DATA_PATH)
+        'reference_data': reference_data
     }
+    return artifacts
 
 def predict_default_probability(input_data, artifacts):
     try:
@@ -160,26 +167,26 @@ def process_batch_data(uploaded_file, artifacts):
         return df
     return None
 
-def load_logs(n_lines=50):
-    """Read last n_lines from predictions.log"""
-    log_file = "logs/predictions.log"
-    if not os.path.exists(log_file):
-        return pd.DataFrame(columns=["timestamp", "entry"])
-    with open(log_file, "r") as f:
-        lines = f.readlines()[-n_lines:]
-    logs = []
-    for line in lines:
-        ts, entry = line.split(" - ", 1)
-        logs.append({"timestamp": ts.strip(), "entry": entry.strip()})
-    return pd.DataFrame(logs)
-
 # ===== Main App =====
 def main():
     st.set_page_config(page_title="Loan Default Predictor", page_icon="💰", layout="wide")
     artifacts = load_artifacts()
     st.title("Loan Default Risk Assessment with Monitoring")
 
-    tab1, tab2, tab3 = st.tabs(["Single Application", "Batch Processing", "Prediction Logs"])
+    # ===== Sidebar Logs Section =====
+    st.sidebar.header("Prediction Logs")
+    if os.path.exists("logs/predictions.log"):
+        with open("logs/predictions.log", "r") as log_file:
+            logs = log_file.readlines()
+        if logs:
+            st.sidebar.text_area("Recent Logs", "".join(logs[-10:]), height=200)
+            st.sidebar.download_button("Download Full Logs", "".join(logs), file_name="predictions.log")
+        else:
+            st.sidebar.info("No predictions logged yet.")
+    else:
+        st.sidebar.info("No logs found.")
+
+    tab1, tab2 = st.tabs(["Single Application", "Batch Processing"])
     
     with tab1:
         input_df = get_user_input()
@@ -191,6 +198,7 @@ def main():
                 st.metric("Probability of Default", f"{prob_default:.2%}")
                 st.metric("Risk Classification", prediction)
 
+                # Log + Drift Report
                 log_prediction(input_df, prediction)
                 report_path = generate_drift_report(artifacts['reference_data'], input_df, "single_app")
                 if report_path:
@@ -209,16 +217,6 @@ def main():
                     with open(report_path, "rb") as f:
                         st.download_button("Download Batch Drift Report", f, file_name=os.path.basename(report_path))
                 st.dataframe(results_df.head())
-
-    with tab3:
-        st.subheader("Prediction Logs")
-        logs_df = load_logs()
-        if logs_df.empty:
-            st.info("No predictions logged yet.")
-        else:
-            st.dataframe(logs_df)
-            with open("logs/predictions.log", "rb") as f:
-                st.download_button("Download Full Log File", f, file_name="predictions.log")
 
 if __name__ == "__main__":
     try:
