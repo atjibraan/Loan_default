@@ -3,18 +3,18 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
+import matplotlib.pyplot as plt
+import plotly.express as px
+import plotly.graph_objects as go
 import os
 import traceback
 import logging
 from datetime import datetime
-import matplotlib.pyplot as plt
-import plotly.express as px
-import plotly.graph_objects as go
-import streamlit.components.v1 as components  # ✅ FIXED IMPORT
-
-# Evidently for monitoring
+from sklearn.base import BaseEstimator, TransformerMixin
 from evidently.report import Report
 from evidently.metric_preset import DataDriftPreset
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler, OrdinalEncoder
 
 # ===== Configuration =====
 MODEL_PATH = 'loan_default_model.pkl'
@@ -26,7 +26,7 @@ MODEL_TRAIN_DATE = "2025-07-29"
 MAX_CSV_ROWS = 2000000
 MAX_FILE_SIZE_MB = 25
 
-# Feature definitions
+# Features
 NUMERICAL_FEATURES = [
     'Age', 'Income', 'LoanAmount', 'CreditScore', 'MonthsEmployed',
     'NumCreditLines', 'InterestRate', 'LoanTerm', 'DTIRatio'
@@ -35,7 +35,7 @@ CATEGORICAL_FEATURES = ['Education', 'EmploymentType', 'LoanPurpose']
 BINARY_FEATURES = ['MaritalStatus', 'HasMortgage', 'HasDependents', 'HasCoSigner']
 FEATURES_ORDER = NUMERICAL_FEATURES + CATEGORICAL_FEATURES + BINARY_FEATURES
 
-# ===== Logging Setup =====
+# ===== Logging =====
 os.makedirs("logs", exist_ok=True)
 logging.basicConfig(
     filename="logs/predictions.log",
@@ -44,21 +44,16 @@ logging.basicConfig(
 )
 
 def log_prediction(input_data, prediction):
-    """Log each prediction"""
     logging.info(
         f"Input: {input_data.to_dict(orient='records') if isinstance(input_data, pd.DataFrame) else input_data}, "
         f"Prediction: {prediction}"
     )
 
 def generate_drift_report(reference_data, new_data, report_name="drift_report"):
-    """Generate and save drift report with Evidently"""
     try:
-        # Drop index-like columns if present
-        for col in ["Unnamed: 0", "LoanID"]:
-            if col in reference_data.columns:
-                reference_data = reference_data.drop(columns=[col])
-            if col in new_data.columns:
-                new_data = new_data.drop(columns=[col])
+        # Ensure same feature order
+        reference_data = reference_data[FEATURES_ORDER]
+        new_data = new_data[FEATURES_ORDER]
 
         report = Report(metrics=[DataDriftPreset()])
         report.run(reference_data=reference_data, current_data=new_data)
@@ -70,11 +65,7 @@ def generate_drift_report(reference_data, new_data, report_name="drift_report"):
         logging.error(f"Error generating drift report: {str(e)}")
         return None
 
-# ===== Preprocessor Stub =====
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder, StandardScaler, OrdinalEncoder
-
+# ===== Preprocessor =====
 class Preprocessor(BaseEstimator, TransformerMixin):
     def __init__(self):
         self.column_transformer = ColumnTransformer(
@@ -92,27 +83,17 @@ class Preprocessor(BaseEstimator, TransformerMixin):
     def transform(self, X):
         return self.column_transformer.transform(X)
 
-# ===== File Validation =====
-if not os.path.exists(MODEL_PATH):
-    st.error(f"Model file not found at {MODEL_PATH}")
-    st.stop()
-if not os.path.exists(PREPROCESSOR_PATH):
-    st.error(f"Preprocessor file not found at {PREPROCESSOR_PATH}")
-    st.stop()
-if not os.path.exists(REFERENCE_DATA_PATH):
-    st.error(f"Reference training data not found at {REFERENCE_DATA_PATH}")
-    st.stop()
-
-# ===== Helper Functions =====
+# ===== Load Artifacts =====
 @st.cache_resource
 def load_artifacts():
     artifacts = {
         'model': joblib.load(MODEL_PATH),
         'preprocessor': joblib.load(PREPROCESSOR_PATH),
-        'reference_data': pd.read_csv(REFERENCE_DATA_PATH)
+        'reference_data': pd.read_csv(REFERENCE_DATA_PATH).drop(columns=["Unnamed: 0"], errors="ignore")
     }
     return artifacts
 
+# ===== Predictions =====
 def predict_default_probability(input_data, artifacts):
     try:
         for col in NUMERICAL_FEATURES:
@@ -124,9 +105,10 @@ def predict_default_probability(input_data, artifacts):
         st.error(f"Prediction error: {str(e)}")
         return None
 
+# ===== UI: User Input =====
 def get_user_input():
     with st.form("loan_input"):
-        st.header("Applicant Information")
+        st.subheader("Applicant Information")
         col1, col2, col3 = st.columns(3)
         age = col1.number_input("Age", 18, 100, 35)
         income = col2.number_input("Annual Income ($)", 1000, 60000)
@@ -161,8 +143,9 @@ def get_user_input():
             }])
     return None
 
+# ===== Batch Processing =====
 def process_batch_data(uploaded_file, artifacts):
-    df = pd.read_csv(uploaded_file, nrows=MAX_CSV_ROWS)
+    df = pd.read_csv(uploaded_file, nrows=MAX_CSV_ROWS).drop(columns=["Unnamed: 0"], errors="ignore")
     probs = predict_default_probability(df[FEATURES_ORDER], artifacts)
     if probs is not None:
         df['Default_Probability'] = probs
@@ -176,9 +159,35 @@ def main():
     artifacts = load_artifacts()
     st.title("💰 Loan Default Risk Assessment with Monitoring")
 
-    tab1, tab2, tab3 = st.tabs(["📊 Single Application", "📂 Batch Processing", "📜 Prediction Logs"])
+    # === Sidebar: Info + Logs ===
+    st.sidebar.header("📌 Developer & Model Info")
+    st.sidebar.markdown(f"**Developer:** {DEVELOPER_NAME}")
+    st.sidebar.markdown(f"**Model Version:** {MODEL_VERSION}")
+    st.sidebar.markdown(f"**Trained on:** {MODEL_TRAIN_DATE}")
 
-    # === Single Application ===
+    # Show + Download logs
+    if os.path.exists("logs/predictions.log"):
+        with open("logs/predictions.log", "r") as f:
+            log_lines = f.readlines()
+
+        # Show last 20 logs
+        st.sidebar.subheader("📜 Recent Predictions")
+        st.sidebar.text("".join(log_lines[-20:]))
+
+        # Download button
+        st.sidebar.download_button(
+            label="📥 Download Prediction Logs",
+            data="".join(log_lines),
+            file_name="predictions.log",
+            mime="text/plain"
+        )
+    else:
+        st.sidebar.info("No logs available yet. Run predictions first!")
+
+    # ===== Tabs =====
+    tab1, tab2 = st.tabs(["🧑 Single Application", "📂 Batch Processing"])
+
+    # --- Single Application ---
     with tab1:
         input_df = get_user_input()
         if input_df is not None:
@@ -186,15 +195,20 @@ def main():
             if probs is not None:
                 prob_default = float(probs[0])
                 prediction = "High Risk" if prob_default >= 0.5 else "Low Risk"
+
                 st.metric("Probability of Default", f"{prob_default:.2%}")
                 st.metric("Risk Classification", prediction)
 
-                # Gauge chart with Plotly
+                # Plotly gauge
                 fig = go.Figure(go.Indicator(
                     mode="gauge+number",
                     value=prob_default * 100,
-                    title={'text': "Default Probability (%)"},
-                    gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "orange"}}
+                    title={'text': "Default Risk (%)"},
+                    gauge={'axis': {'range': [0, 100]},
+                           'bar': {'color': "orange"},
+                           'steps': [
+                               {'range': [0, 50], 'color': "lightgreen"},
+                               {'range': [50, 100], 'color': "red"}]}
                 ))
                 st.plotly_chart(fig, use_container_width=True)
 
@@ -202,11 +216,10 @@ def main():
                 log_prediction(input_df, prediction)
                 report_path = generate_drift_report(artifacts['reference_data'], input_df, "single_app")
                 if report_path:
-                    with open(report_path, "r", encoding="utf-8") as f:
-                        html = f.read()
-                    components.html(html, height=350, scrolling=True)
+                    with open(report_path, "rb") as f:
+                        st.download_button("📊 Download Drift Report", f, file_name=os.path.basename(report_path))
 
-    # === Batch Processing ===
+    # --- Batch Processing ---
     with tab2:
         uploaded_file = st.file_uploader("Upload CSV", type="csv")
         if uploaded_file is not None:
@@ -216,29 +229,21 @@ def main():
                 log_prediction(results_df[FEATURES_ORDER], results_df['Risk_Classification'].tolist())
                 report_path = generate_drift_report(artifacts['reference_data'], results_df[FEATURES_ORDER], "batch_app")
                 if report_path:
-                    with open(report_path, "r", encoding="utf-8") as f:
-                        html = f.read()
-                    components.html(html, height=350, scrolling=True)
+                    with open(report_path, "rb") as f:
+                        st.download_button("📊 Download Batch Drift Report", f, file_name=os.path.basename(report_path))
 
-                # Risk Distribution Chart
-                fig = px.pie(results_df, names='Risk_Classification', title="Risk Distribution")
+                # Distribution chart
+                fig = px.histogram(results_df, x="Default_Probability", nbins=20,
+                                   color="Risk_Classification", barmode="overlay",
+                                   title="Distribution of Default Probabilities")
                 st.plotly_chart(fig, use_container_width=True)
-                st.dataframe(results_df.head())
 
-    # === Prediction Logs ===
-    with tab3:
-        st.subheader("📜 Recent Predictions Log")
-        try:
-            with open("logs/predictions.log", "r") as log_file:
-                log_lines = log_file.readlines()[-20:]  # last 20 lines
-                st.text("".join(log_lines))
-        except Exception:
-            st.info("No logs available yet.")
+                st.dataframe(results_df.head())
 
 if __name__ == "__main__":
     try:
         main()
-    except Exception:
+    except Exception as e:
         st.error("Critical error occurred")
         st.code(traceback.format_exc())
         st.stop()
