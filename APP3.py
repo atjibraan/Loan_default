@@ -1,10 +1,11 @@
-# APP3.py (Loan Default Predictor with Logging + Drift Monitoring)
+# APP3.py
 import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
 import matplotlib.pyplot as plt
 import os
+import sys
 import traceback
 from datetime import datetime
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -16,7 +17,7 @@ from evidently.metric_preset import DataDriftPreset
 # ===== Configuration =====
 MODEL_PATH = 'loan_default_model.pkl'
 PREPROCESSOR_PATH = 'preprocessor.pkl'
-REFERENCE_DATA_PATH = "X_train.csv"   # store your training data here
+REFERENCE_DATA_PATH = "X_train.csv"
 DEVELOPER_NAME = "Jibraan Attar"
 MODEL_VERSION = "2.0"
 MODEL_TRAIN_DATE = "2025-07-29"
@@ -43,13 +44,10 @@ logging.basicConfig(
 
 def log_prediction(input_data, prediction):
     """Log each prediction"""
-    try:
-        logging.info(
-            f"Input: {input_data.to_dict(orient='records') if isinstance(input_data, pd.DataFrame) else input_data}, "
-            f"Prediction: {prediction}"
-        )
-    except Exception as e:
-        logging.error(f"Logging failed: {str(e)}")
+    logging.info(
+        f"Input: {input_data.to_dict(orient='records') if isinstance(input_data, pd.DataFrame) else input_data}, "
+        f"Prediction: {prediction}"
+    )
 
 def generate_drift_report(reference_data, new_data, report_name="drift_report"):
     """Generate and save drift report with Evidently"""
@@ -63,6 +61,27 @@ def generate_drift_report(reference_data, new_data, report_name="drift_report"):
     except Exception as e:
         logging.error(f"Error generating drift report: {str(e)}")
         return None
+
+# ===== Add Preprocessor Class (Fix for joblib load) =====
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler, OrdinalEncoder
+
+class Preprocessor(BaseEstimator, TransformerMixin):
+    def __init__(self):
+        self.column_transformer = ColumnTransformer(
+            transformers=[
+                ('num', StandardScaler(), NUMERICAL_FEATURES),
+                ('cat', OneHotEncoder(drop='first', sparse_output=False), CATEGORICAL_FEATURES),
+                ('bin', OrdinalEncoder(), BINARY_FEATURES)
+            ]
+        )
+
+    def fit(self, X, y=None):
+        self.column_transformer.fit(X)
+        return self
+
+    def transform(self, X):
+        return self.column_transformer.transform(X)
 
 # ===== File Validation =====
 if not os.path.exists(MODEL_PATH):
@@ -78,12 +97,11 @@ if not os.path.exists(REFERENCE_DATA_PATH):
 # ===== Helper Functions =====
 @st.cache_resource
 def load_artifacts():
-    artifacts = {
+    return {
         'model': joblib.load(MODEL_PATH),
         'preprocessor': joblib.load(PREPROCESSOR_PATH),
         'reference_data': pd.read_csv(REFERENCE_DATA_PATH)
     }
-    return artifacts
 
 def predict_default_probability(input_data, artifacts):
     try:
@@ -142,13 +160,26 @@ def process_batch_data(uploaded_file, artifacts):
         return df
     return None
 
+def load_logs(n_lines=50):
+    """Read last n_lines from predictions.log"""
+    log_file = "logs/predictions.log"
+    if not os.path.exists(log_file):
+        return pd.DataFrame(columns=["timestamp", "entry"])
+    with open(log_file, "r") as f:
+        lines = f.readlines()[-n_lines:]
+    logs = []
+    for line in lines:
+        ts, entry = line.split(" - ", 1)
+        logs.append({"timestamp": ts.strip(), "entry": entry.strip()})
+    return pd.DataFrame(logs)
+
 # ===== Main App =====
 def main():
     st.set_page_config(page_title="Loan Default Predictor", page_icon="💰", layout="wide")
     artifacts = load_artifacts()
     st.title("Loan Default Risk Assessment with Monitoring")
 
-    tab1, tab2 = st.tabs(["Single Application", "Batch Processing"])
+    tab1, tab2, tab3 = st.tabs(["Single Application", "Batch Processing", "Prediction Logs"])
     
     with tab1:
         input_df = get_user_input()
@@ -160,10 +191,7 @@ def main():
                 st.metric("Probability of Default", f"{prob_default:.2%}")
                 st.metric("Risk Classification", prediction)
 
-                # ✅ Log prediction
-                log_prediction(input_df, {"probability": prob_default, "classification": prediction})
-
-                # Drift Report
+                log_prediction(input_df, prediction)
                 report_path = generate_drift_report(artifacts['reference_data'], input_df, "single_app")
                 if report_path:
                     with open(report_path, "rb") as f:
@@ -175,18 +203,22 @@ def main():
             results_df = process_batch_data(uploaded_file, artifacts)
             if results_df is not None:
                 st.success(f"Processed {len(results_df)} applications!")
-
-                # ✅ Log batch predictions
-                log_prediction(
-                    results_df[FEATURES_ORDER],
-                    results_df[['Default_Probability','Risk_Classification']].to_dict(orient="records")
-                )
-
+                log_prediction(results_df[FEATURES_ORDER], results_df['Risk_Classification'].tolist())
                 report_path = generate_drift_report(artifacts['reference_data'], results_df[FEATURES_ORDER], "batch_app")
                 if report_path:
                     with open(report_path, "rb") as f:
                         st.download_button("Download Batch Drift Report", f, file_name=os.path.basename(report_path))
                 st.dataframe(results_df.head())
+
+    with tab3:
+        st.subheader("Prediction Logs")
+        logs_df = load_logs()
+        if logs_df.empty:
+            st.info("No predictions logged yet.")
+        else:
+            st.dataframe(logs_df)
+            with open("logs/predictions.log", "rb") as f:
+                st.download_button("Download Full Log File", f, file_name="predictions.log")
 
 if __name__ == "__main__":
     try:
