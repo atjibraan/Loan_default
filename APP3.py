@@ -1,5 +1,4 @@
-# APP3.py (Loan Default Predictor with Monitoring + Logs Tab + Correct Preprocessor)
-
+# APP3.py (Loan Default Predictor with Logging + Drift Monitoring)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,13 +7,7 @@ import matplotlib.pyplot as plt
 import os
 import traceback
 from datetime import datetime
-import logging
-
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.preprocessing import StandardScaler, OneHotEncoder, OrdinalEncoder
-from sklearn.compose import ColumnTransformer
-from imblearn.over_sampling import SMOTE
-from imblearn.under_sampling import RandomUnderSampler
 
 # Evidently for monitoring
 from evidently.report import Report
@@ -23,7 +16,7 @@ from evidently.metric_preset import DataDriftPreset
 # ===== Configuration =====
 MODEL_PATH = 'loan_default_model.pkl'
 PREPROCESSOR_PATH = 'preprocessor.pkl'
-REFERENCE_DATA_PATH = "X_train.csv"
+REFERENCE_DATA_PATH = "X_train.csv"   # store your training data here
 DEVELOPER_NAME = "Jibraan Attar"
 MODEL_VERSION = "2.0"
 MODEL_TRAIN_DATE = "2025-07-29"
@@ -39,46 +32,9 @@ CATEGORICAL_FEATURES = ['Education', 'EmploymentType', 'LoanPurpose']
 BINARY_FEATURES = ['MaritalStatus', 'HasMortgage', 'HasDependents', 'HasCoSigner']
 FEATURES_ORDER = NUMERICAL_FEATURES + CATEGORICAL_FEATURES + BINARY_FEATURES
 
-# ===== Hybrid Resampler =====
-class HybridResampler(BaseEstimator, TransformerMixin):
-    def __init__(self, sampling_strategy=0.5, random_state=42):
-        self.sampling_strategy = sampling_strategy
-        self.random_state = random_state
-        self.smote = SMOTE(sampling_strategy=self.sampling_strategy, random_state=self.random_state)
-        self.under = RandomUnderSampler(sampling_strategy=0.8, random_state=self.random_state)
-
-    def fit_resample(self, X, y):
-        X_res, y_res = self.smote.fit_resample(X, y)
-        X_res, y_res = self.under.fit_resample(X_res, y_res)
-        return X_res, y_res
-
-# ===== Correct Preprocessor =====
-class Preprocessor(BaseEstimator, TransformerMixin):
-    def __init__(self):
-        self.num_features = NUMERICAL_FEATURES
-        self.cat_features = CATEGORICAL_FEATURES
-        self.bin_features = BINARY_FEATURES
-        self.num_transformer = StandardScaler()
-        self.cat_transformer = OneHotEncoder(handle_unknown="ignore")
-        self.bin_transformer = OrdinalEncoder()
-        self.column_transformer = None   # built in fit()
-
-    def fit(self, X, y=None):
-        self.column_transformer = ColumnTransformer(
-            transformers=[
-                ("num", self.num_transformer, self.num_features),
-                ("cat", self.cat_transformer, self.cat_features),
-                ("bin", self.bin_transformer, self.bin_features),
-            ]
-        )
-        self.column_transformer.fit(X, y)
-        return self
-
-    def transform(self, X):
-        return self.column_transformer.transform(X)
-
 # ===== Logging Setup =====
 os.makedirs("logs", exist_ok=True)
+import logging
 logging.basicConfig(
     filename="logs/predictions.log",
     level=logging.INFO,
@@ -86,9 +42,17 @@ logging.basicConfig(
 )
 
 def log_prediction(input_data, prediction):
-    logging.info(f"Input: {input_data.to_dict(orient='records') if isinstance(input_data, pd.DataFrame) else input_data}, Prediction: {prediction}")
+    """Log each prediction"""
+    try:
+        logging.info(
+            f"Input: {input_data.to_dict(orient='records') if isinstance(input_data, pd.DataFrame) else input_data}, "
+            f"Prediction: {prediction}"
+        )
+    except Exception as e:
+        logging.error(f"Logging failed: {str(e)}")
 
 def generate_drift_report(reference_data, new_data, report_name="drift_report"):
+    """Generate and save drift report with Evidently"""
     try:
         report = Report(metrics=[DataDriftPreset()])
         report.run(reference_data=reference_data, current_data=new_data)
@@ -178,26 +142,13 @@ def process_batch_data(uploaded_file, artifacts):
         return df
     return None
 
-# ===== Logs Viewer =====
-def view_logs():
-    st.subheader("Prediction Logs")
-    log_file = "logs/predictions.log"
-    if os.path.exists(log_file):
-        with open(log_file, "r") as f:
-            logs = f.read()
-        st.text_area("Logs", logs, height=400)
-        with open(log_file, "rb") as f:
-            st.download_button("Download Logs", f, file_name="predictions.log")
-    else:
-        st.info("No logs found yet.")
-
 # ===== Main App =====
 def main():
     st.set_page_config(page_title="Loan Default Predictor", page_icon="💰", layout="wide")
     artifacts = load_artifacts()
     st.title("Loan Default Risk Assessment with Monitoring")
 
-    tab1, tab2, tab3 = st.tabs(["Single Application", "Batch Processing", "Logs"])
+    tab1, tab2 = st.tabs(["Single Application", "Batch Processing"])
     
     with tab1:
         input_df = get_user_input()
@@ -209,8 +160,10 @@ def main():
                 st.metric("Probability of Default", f"{prob_default:.2%}")
                 st.metric("Risk Classification", prediction)
 
-                # Log + Drift Report
-                log_prediction(input_df, prediction)
+                # ✅ Log prediction
+                log_prediction(input_df, {"probability": prob_default, "classification": prediction})
+
+                # Drift Report
                 report_path = generate_drift_report(artifacts['reference_data'], input_df, "single_app")
                 if report_path:
                     with open(report_path, "rb") as f:
@@ -222,15 +175,18 @@ def main():
             results_df = process_batch_data(uploaded_file, artifacts)
             if results_df is not None:
                 st.success(f"Processed {len(results_df)} applications!")
-                log_prediction(results_df[FEATURES_ORDER], results_df['Risk_Classification'].tolist())
+
+                # ✅ Log batch predictions
+                log_prediction(
+                    results_df[FEATURES_ORDER],
+                    results_df[['Default_Probability','Risk_Classification']].to_dict(orient="records")
+                )
+
                 report_path = generate_drift_report(artifacts['reference_data'], results_df[FEATURES_ORDER], "batch_app")
                 if report_path:
                     with open(report_path, "rb") as f:
                         st.download_button("Download Batch Drift Report", f, file_name=os.path.basename(report_path))
                 st.dataframe(results_df.head())
-
-    with tab3:
-        view_logs()
 
 if __name__ == "__main__":
     try:
