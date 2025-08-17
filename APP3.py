@@ -1,4 +1,4 @@
-# loan_default_app.py
+# APP3.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -58,6 +58,28 @@ def generate_drift_report(reference_data, new_data, report_name="drift_report"):
     except Exception as e:
         logging.error(f"Error generating drift report: {str(e)}")
         return None
+
+# ===== Add Preprocessor Class (Fix for joblib load) =====
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler, OrdinalEncoder
+
+class Preprocessor(BaseEstimator, TransformerMixin):
+    """Custom Preprocessor used during training"""
+    def __init__(self):
+        self.column_transformer = ColumnTransformer(
+            transformers=[
+                ('num', StandardScaler(), NUMERICAL_FEATURES),
+                ('cat', OneHotEncoder(drop='first', sparse_output=False), CATEGORICAL_FEATURES),
+                ('bin', OrdinalEncoder(), BINARY_FEATURES)
+            ]
+        )
+
+    def fit(self, X, y=None):
+        self.column_transformer.fit(X)
+        return self
+
+    def transform(self, X):
+        return self.column_transformer.transform(X)
 
 # ===== File Validation =====
 if not os.path.exists(MODEL_PATH):
