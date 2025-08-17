@@ -7,6 +7,7 @@ xgboost==2.0.3
 imbalanced-learn>=0.12.0
 matplotlib==3.8.4
 threadpoolctl==3.5.0
+evidently==0.4.33
 
 
 
