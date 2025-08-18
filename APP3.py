@@ -1,4 +1,4 @@
-# APP3.py
+# APP3.py (fixed version)
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -341,52 +341,52 @@ def main():
         else:
             st.info("No prediction logs found")
 
-with tab4:
-    st.subheader("Model Explainability")
-    
-    try:
-        # Try importing SHAP with basic functionality
-        import shap
-        from shap import Explainer
-        shap.initjs()
+    with tab4:
+        st.subheader("Model Explainability")
         
-        st.write("### Global Feature Importance")
-        
-        # Use a smaller sample for SHAP calculations
-        sample = artifacts['reference_data'].sample(50, random_state=42)
-        processed = artifacts['preprocessor'].transform(sample)
-        
-        # Use LinearExplainer for better compatibility
-        explainer = shap.LinearExplainer(artifacts['model'], processed)
-        shap_values = explainer.shap_values(processed)
-        
-        # Plot summary
-        fig, ax = plt.subplots()
-        shap.summary_plot(shap_values, processed, show=False)
-        st.pyplot(fig)
-        
-    except ImportError:
-        st.warning("""
-        **SHAP explainability requires additional dependencies.**  
-        For full functionality, please install locally with:
-        ```
-        pip install shap==0.44.0
-        ```
-        """)
-    except Exception as e:
-        st.warning(f"Limited explainability due to: {str(e)}")
-        # Fallback to feature importance
         try:
-            if hasattr(artifacts['model'], 'feature_importances_'):
-                importance = artifacts['model'].feature_importances_
-                features = artifacts['preprocessor'].get_feature_names_out()
-                
-                fig, ax = plt.subplots()
-                pd.Series(importance, index=features).sort_values().plot.barh()
-                plt.title("Feature Importance")
-                st.pyplot(fig)
-        except Exception:
-            st.error("Could not generate explanations with available resources")
+            # Try importing SHAP with basic functionality
+            import shap
+            from shap import Explainer
+            shap.initjs()
+            
+            st.write("### Global Feature Importance")
+            
+            # Use a smaller sample for SHAP calculations
+            sample = artifacts['reference_data'].sample(50, random_state=42)
+            processed = artifacts['preprocessor'].transform(sample)
+            
+            # Use LinearExplainer for better compatibility
+            explainer = shap.LinearExplainer(artifacts['model'], processed)
+            shap_values = explainer.shap_values(processed)
+            
+            # Plot summary
+            fig, ax = plt.subplots()
+            shap.summary_plot(shap_values, processed, show=False)
+            st.pyplot(fig)
+            
+        except ImportError:
+            st.warning("""
+            **SHAP explainability requires additional dependencies.**  
+            For full functionality, please install locally with:
+            ```
+            pip install shap==0.44.0
+            ```
+            """)
+        except Exception as e:
+            st.warning(f"Limited explainability due to: {str(e)}")
+            # Fallback to feature importance
+            try:
+                if hasattr(artifacts['model'], 'feature_importances_'):
+                    importance = artifacts['model'].feature_importances_
+                    features = artifacts['preprocessor'].get_feature_names_out()
+                    
+                    fig, ax = plt.subplots()
+                    pd.Series(importance, index=features).sort_values().plot.barh()
+                    plt.title("Feature Importance")
+                    st.pyplot(fig)
+            except Exception:
+                st.error("Could not generate explanations with available resources")
 
 if __name__ == "__main__":
     try:
