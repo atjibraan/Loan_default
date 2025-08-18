@@ -340,39 +340,35 @@ def main():
             st.text_area("Log Contents", logs, height=400)
         else:
             st.info("No prediction logs found")
-
-    with tab4:
+      with tab4:
         st.subheader("Model Explainability")
-        
+
         try:
-            # Try importing SHAP with basic functionality
             import shap
+        except ImportError:
+            with st.spinner("Installing SHAP... please wait (this may take ~1 min)"):
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "shap==0.44.0"])
+            import shap
+
+        try:
             from shap import Explainer
             shap.initjs()
-            
+
             st.write("### Global Feature Importance")
-            
+
             # Use a smaller sample for SHAP calculations
             sample = artifacts['reference_data'].sample(50, random_state=42)
             processed = artifacts['preprocessor'].transform(sample)
-            
+
             # Use LinearExplainer for better compatibility
             explainer = shap.LinearExplainer(artifacts['model'], processed)
             shap_values = explainer.shap_values(processed)
-            
+
             # Plot summary
             fig, ax = plt.subplots()
             shap.summary_plot(shap_values, processed, show=False)
             st.pyplot(fig)
-            
-        except ImportError:
-            st.warning("""
-            **SHAP explainability requires additional dependencies.**  
-            For full functionality, please install locally with:
-            ```
-            pip install shap==0.44.0
-            ```
-            """)
+
         except Exception as e:
             st.warning(f"Limited explainability due to: {str(e)}")
             # Fallback to feature importance
@@ -380,13 +376,14 @@ def main():
                 if hasattr(artifacts['model'], 'feature_importances_'):
                     importance = artifacts['model'].feature_importances_
                     features = artifacts['preprocessor'].get_feature_names_out()
-                    
+
                     fig, ax = plt.subplots()
                     pd.Series(importance, index=features).sort_values().plot.barh()
                     plt.title("Feature Importance")
                     st.pyplot(fig)
             except Exception:
                 st.error("Could not generate explanations with available resources")
+
 
 if __name__ == "__main__":
     try:
