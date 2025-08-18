@@ -13,3 +13,4 @@ cloudpickle>=3.0.0
 imbalanced-learn>=0.12.0
 evidently>=0.4.30
 numba<0.60
+shap==0.42.1
