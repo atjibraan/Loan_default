@@ -1,4 +1,4 @@
-# APP3.py (final fixed version)
+# APP3.py (final fixed version with SHAP lazy install pinned to 0.42.1)
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -347,8 +347,8 @@ def main():
         try:
             import shap
         except ImportError:
-            with st.spinner("Installing SHAP... please wait (this may take ~1 min)"):
-                subprocess.check_call([sys.executable, "-m", "pip", "install", "shap==0.44.0"])
+            with st.spinner("Installing SHAP... please wait (first-time only)"):
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "shap==0.42.1"])
             import shap
 
         try:
@@ -361,7 +361,7 @@ def main():
             sample = artifacts['reference_data'].sample(50, random_state=42)
             processed = artifacts['preprocessor'].transform(sample)
 
-            # Use LinearExplainer for better compatibility
+            # LinearExplainer for compatibility
             explainer = shap.LinearExplainer(artifacts['model'], processed)
             shap_values = explainer.shap_values(processed)
 
