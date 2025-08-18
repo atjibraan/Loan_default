@@ -13,7 +13,7 @@ matplotlib==3.8.2
 evidently==0.4.8
 
 # Explainability
-shap==0.45.0
+shap==0.44.0
 
 # Additional utilities
 python-dateutil==2.8.2
