@@ -341,49 +341,52 @@ def main():
         else:
             st.info("No prediction logs found")
 
-    with tab4:
-        st.subheader("Model Explainability (SHAP)")
+with tab4:
+    st.subheader("Model Explainability")
+    
+    try:
+        # Try importing SHAP with basic functionality
+        import shap
+        from shap import Explainer
+        shap.initjs()
         
+        st.write("### Global Feature Importance")
+        
+        # Use a smaller sample for SHAP calculations
+        sample = artifacts['reference_data'].sample(50, random_state=42)
+        processed = artifacts['preprocessor'].transform(sample)
+        
+        # Use LinearExplainer for better compatibility
+        explainer = shap.LinearExplainer(artifacts['model'], processed)
+        shap_values = explainer.shap_values(processed)
+        
+        # Plot summary
+        fig, ax = plt.subplots()
+        shap.summary_plot(shap_values, processed, show=False)
+        st.pyplot(fig)
+        
+    except ImportError:
+        st.warning("""
+        **SHAP explainability requires additional dependencies.**  
+        For full functionality, please install locally with:
+        ```
+        pip install shap==0.44.0
+        ```
+        """)
+    except Exception as e:
+        st.warning(f"Limited explainability due to: {str(e)}")
+        # Fallback to feature importance
         try:
-            import shap
-            from shap import Explainer
-            
-            st.write("### Feature Importance (SHAP Summary)")
-            
-            # Sample data for explanation
-            sample = artifacts['reference_data'].sample(200, random_state=42)
-            processed = artifacts['preprocessor'].transform(sample)
-            
-            # Create explainer
-            explainer = Explainer(artifacts['model'])
-            shap_values = explainer(processed)
-            
-            # Summary plot
-            fig, ax = plt.subplots()
-            shap.summary_plot(shap_values, processed, show=False)
-            st.pyplot(fig)
-            
-            # Optionally show waterfall plot for a specific example
-            st.write("### Individual Prediction Explanation")
-            example_idx = st.slider("Select example to explain", 0, len(sample)-1, 0)
-            fig2, ax2 = plt.subplots()
-            shap.plots.waterfall(shap_values[example_idx], show=False)
-            st.pyplot(fig2)
-            
-        except ImportError:
-            st.warning("SHAP explainability is not available because the SHAP library is not installed.")
-            if st.button("Install SHAP (requires internet connection)"):
-                with st.spinner("Installing SHAP... This may take a minute"):
-                    try:
-                        subprocess.run([sys.executable, "-m", "pip", "install", "shap"], check=True)
-                        st.success("SHAP installed successfully! Please refresh the page.")
-                        st.experimental_rerun()
-                    except Exception as e:
-                        st.error(f"Failed to install SHAP: {str(e)}")
-                        st.write("You can try installing it manually with: `pip install shap`")
-        except Exception as e:
-            st.error(f"Error generating SHAP explanations: {str(e)}")
-            st.code(traceback.format_exc())
+            if hasattr(artifacts['model'], 'feature_importances_'):
+                importance = artifacts['model'].feature_importances_
+                features = artifacts['preprocessor'].get_feature_names_out()
+                
+                fig, ax = plt.subplots()
+                pd.Series(importance, index=features).sort_values().plot.barh()
+                plt.title("Feature Importance")
+                st.pyplot(fig)
+        except Exception:
+            st.error("Could not generate explanations with available resources")
 
 if __name__ == "__main__":
     try:
