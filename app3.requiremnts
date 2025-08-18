@@ -22,3 +22,6 @@ evidently==0.4.33
 
 # Logging & Utils
 cloudpickle>=3.0.0
+
+# Deployment Stability
+python-dotenv>=1.0.1
