@@ -1,4 +1,4 @@
-# Build Essentials (for SHAP and other deps)
+# Build Essentials
 pip>=24.0
 setuptools>=65.5.0
 wheel>=0.40.0
@@ -24,6 +24,7 @@ seaborn>=0.13.0
 # Explainability / Monitoring
 shap==0.44.1
 numba>=0.55.0
+llvmlite>=0.39.0
 evidently==0.4.33
 
 # Logging & Utils
