@@ -10,7 +10,9 @@ import plotly.graph_objects as go
 import os
 from datetime import datetime
 
+# ----------------------------
 # Load artifacts
+# ----------------------------
 @st.cache_resource
 def load_artifacts():
     model = joblib.load("loan_default_model.pkl")
@@ -20,13 +22,18 @@ def load_artifacts():
 
 artifacts = load_artifacts()
 
-# Setup SHAP explainer (Tree-based model assumed)
+# ----------------------------
+# Setup SHAP Explainer
+# ----------------------------
 @st.cache_resource
 def get_explainer():
     try:
-        background = artifacts["preprocessor"].transform(
-            artifacts["reference_data"].drop(columns=["Default"])
-        ) if artifacts["reference_data"] is not None else None
+        if artifacts["reference_data"] is not None:
+            background = artifacts["preprocessor"].transform(
+                artifacts["reference_data"].drop(columns=["Default"])
+            )
+        else:
+            background = None
         explainer = shap.Explainer(artifacts["model"], background)
         return explainer
     except Exception as e:
@@ -35,32 +42,44 @@ def get_explainer():
 
 explainer = get_explainer()
 
-# Logging function (ethical: anonymized only predictions)
+# ----------------------------
+# Logging function
+# ----------------------------
 def log_prediction(prediction: int, probability: float):
     if not os.path.exists("logs"):
         os.makedirs("logs")
     with open("logs/predictions.log", "a") as f:
         f.write(f"{datetime.now()}, Prediction: {prediction}, Prob: {probability:.4f}\n")
 
+# ----------------------------
 # Streamlit App
+# ----------------------------
 st.set_page_config(page_title="Loan Default Prediction App", layout="wide")
 st.title("💳 Loan Default Prediction App")
 
 menu = ["Home", "Predict (Single)", "Predict (Batch)", "Drift Report", "Logs", "Model Explainability"]
 choice = st.sidebar.radio("Navigation", menu)
 
+# ----------------------------
 # Home
+# ----------------------------
 if choice == "Home":
     st.subheader("Welcome")
     st.write("This app predicts loan default risk using an ML model with preprocessing pipeline.")
     st.markdown("### Features\n- Single & batch predictions\n- Data drift monitoring\n- Prediction logs\n- SHAP explainability (new)")
 
+# ----------------------------
 # Single Prediction
+# ----------------------------
 elif choice == "Predict (Single)":
     st.subheader("Single Prediction")
     with st.form("input_form"):
         features = {}
-        for col in ["Age","Income","LoanAmount","CreditScore","MonthsEmployed","NumCreditLines","InterestRate","LoanTerm","DTIRatio","Education","EmploymentType","MaritalStatus","HasMortgage","HasDependents","LoanPurpose","HasCoSigner"]:
+        for col in [
+            "Age","Income","LoanAmount","CreditScore","MonthsEmployed","NumCreditLines",
+            "InterestRate","LoanTerm","DTIRatio","Education","EmploymentType","MaritalStatus",
+            "HasMortgage","HasDependents","LoanPurpose","HasCoSigner"
+        ]:
             features[col] = st.text_input(f"Enter {col}")
         submit = st.form_submit_button("Predict")
 
@@ -89,7 +108,9 @@ elif choice == "Predict (Single)":
         except Exception as e:
             st.error(f"Error: {e}")
 
+# ----------------------------
 # Batch Prediction
+# ----------------------------
 elif choice == "Predict (Batch)":
     st.subheader("Batch Prediction")
     uploaded = st.file_uploader("Upload CSV", type="csv")
@@ -104,7 +125,9 @@ elif choice == "Predict (Batch)":
         except Exception as e:
             st.error(f"Error: {e}")
 
+# ----------------------------
 # Drift Report
+# ----------------------------
 elif choice == "Drift Report":
     st.subheader("Data Drift Report")
     if artifacts["reference_data"] is not None:
@@ -119,7 +142,9 @@ elif choice == "Drift Report":
     else:
         st.info("Reference data not available for drift analysis.")
 
+# ----------------------------
 # Logs
+# ----------------------------
 elif choice == "Logs":
     st.subheader("Prediction Logs")
     if os.path.exists("logs/predictions.log"):
@@ -128,7 +153,9 @@ elif choice == "Logs":
     else:
         st.info("No logs yet.")
 
+# ----------------------------
 # Model Explainability
+# ----------------------------
 elif choice == "Model Explainability":
     st.subheader("Model Explainability with SHAP")
     if explainer is None:
@@ -139,14 +166,17 @@ elif choice == "Model Explainability":
             X = artifacts["preprocessor"].transform(latest_input)
             shap_values = explainer(X)
 
+            # Feature Importance Bar Plot
             st.write("### Feature Importance (Latest Prediction)")
             fig, ax = plt.subplots()
             shap.plots.bar(shap_values[0], show=False)
             st.pyplot(fig)
 
+            # Waterfall Plot
             st.write("### Detailed Impact (Waterfall Plot)")
-            fig, ax = plt.subplots()
+            fig, ax = plt.subplots(figsize=(10, 6))
             shap.plots.waterfall(shap_values[0], show=False)
             st.pyplot(fig)
+
         else:
             st.info("Run a prediction first to generate SHAP explanations.")
