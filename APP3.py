@@ -7,8 +7,10 @@ import joblib
 import os
 import traceback
 import subprocess
+import sys
 from datetime import datetime
 from sklearn.base import BaseEstimator, TransformerMixin
+import matplotlib.pyplot as plt
 
 # Plotly for interactive visuals
 import plotly.graph_objects as go
@@ -185,19 +187,66 @@ def prob_hist(df):
 def get_user_input():
     with st.form("loan_input"):
         st.header("Applicant Information")
-        # (unchanged, same as your script…)
-        # returns DataFrame
-        # ...
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            age = st.number_input("Age", min_value=18, max_value=100, value=30)
+            income = st.number_input("Annual Income ($)", min_value=0, value=50000)
+            loan_amount = st.number_input("Loan Amount ($)", min_value=0, value=10000)
+            credit_score = st.number_input("Credit Score", min_value=300, max_value=850, value=700)
+            months_employed = st.number_input("Months Employed", min_value=0, value=36)
+            
+        with col2:
+            num_credit_lines = st.number_input("Number of Credit Lines", min_value=0, value=2)
+            interest_rate = st.number_input("Interest Rate (%)", min_value=0.0, max_value=30.0, value=5.0)
+            loan_term = st.number_input("Loan Term (months)", min_value=1, value=36)
+            dti_ratio = st.number_input("Debt-to-Income Ratio", min_value=0.0, max_value=1.0, value=0.3)
+            education = st.selectbox("Education", ["High School", "Bachelor's", "Master's", "PhD"])
+            
+        employment_type = st.selectbox("Employment Type", ["Full-time", "Part-time", "Self-employed", "Unemployed"])
+        loan_purpose = st.selectbox("Loan Purpose", ["Business", "Home", "Education", "Personal"])
+        marital_status = st.selectbox("Marital Status", ["Single", "Married"])
+        has_mortgage = st.selectbox("Has Mortgage", ["No", "Yes"])
+        has_dependents = st.selectbox("Has Dependents", ["No", "Yes"])
+        has_cosigner = st.selectbox("Has Co-Signer", ["No", "Yes"])
+        
+        submitted = st.form_submit_button("Predict Default Risk")
+        
+        if submitted:
+            input_data = {
+                'Age': age,
+                'Income': income,
+                'LoanAmount': loan_amount,
+                'CreditScore': credit_score,
+                'MonthsEmployed': months_employed,
+                'NumCreditLines': num_credit_lines,
+                'InterestRate': interest_rate,
+                'LoanTerm': loan_term,
+                'DTIRatio': dti_ratio,
+                'Education': education,
+                'EmploymentType': employment_type,
+                'LoanPurpose': loan_purpose,
+                'MaritalStatus': marital_status,
+                'HasMortgage': has_mortgage,
+                'HasDependents': has_dependents,
+                'HasCoSigner': has_cosigner
+            }
+            return pd.DataFrame([input_data])
+    return None
 
 def process_batch_data(uploaded_file, artifacts):
-    df = pd.read_csv(uploaded_file, nrows=MAX_CSV_ROWS)
-    df = _strip_aux_columns(df)
-    probs = predict_default_probability(df[FEATURES_ORDER], artifacts)
-    if probs is not None:
-        df['Default_Probability'] = probs
-        df['Risk_Classification'] = np.where(probs >= THRESHOLD, "High Risk", "Low Risk")
-        return df
-    return None
+    try:
+        df = pd.read_csv(uploaded_file, nrows=MAX_CSV_ROWS)
+        df = _strip_aux_columns(df)
+        probs = predict_default_probability(df[FEATURES_ORDER], artifacts)
+        if probs is not None:
+            df['Default_Probability'] = probs
+            df['Risk_Classification'] = np.where(probs >= THRESHOLD, "High Risk", "Low Risk")
+            return df
+    except Exception as e:
+        st.error(f"Error processing batch file: {str(e)}")
+        return None
 
 # ===== Main App =====
 def main():
@@ -209,29 +258,131 @@ def main():
 
     tab1, tab2, tab3, tab4 = st.tabs(["Single Application", "Batch Processing", "Prediction Logs", "Explainability"])
 
-    # ---- (Single App, Batch, Logs stay exactly as before)
+    with tab1:
+        st.header("Single Application Evaluation")
+        input_data = get_user_input()
+        if input_data is not None:
+            prob = predict_default_probability(input_data, artifacts)
+            if prob is not None:
+                prob = prob[0]
+                log_prediction(input_data, prob)
+                
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    st.plotly_chart(gauge_probability(prob), use_container_width=True)
+                with col2:
+                    st.write("### Risk Assessment")
+                    if prob >= THRESHOLD:
+                        st.error(f"High Risk of Default ({prob*100:.1f}%)")
+                        st.markdown("""
+                        **Recommendation:** 
+                        - Consider declining this application
+                        - Request additional collateral
+                        - Offer higher interest rate
+                        """)
+                    else:
+                        st.success(f"Low Risk of Default ({prob*100:.1f}%)")
+                        st.markdown("""
+                        **Recommendation:** 
+                        - Application appears creditworthy
+                        - Standard terms can be offered
+                        """)
 
-    # ---- Explainability Tab
+    with tab2:
+        st.header("Batch Processing")
+        uploaded_file = st.file_uploader("Upload CSV file with loan applications", type=["csv"])
+        
+        if uploaded_file is not None:
+            if uploaded_file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
+                st.error(f"File too large. Maximum size is {MAX_FILE_SIZE_MB}MB")
+            else:
+                with st.spinner("Processing batch file..."):
+                    results = process_batch_data(uploaded_file, artifacts)
+                    if results is not None:
+                        st.success(f"Processed {len(results)} applications")
+                        
+                        st.download_button(
+                            label="Download Results",
+                            data=results.to_csv(index=False),
+                            file_name="loan_predictions.csv",
+                            mime="text/csv"
+                        )
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.plotly_chart(risk_pie(results), use_container_width=True)
+                        with col2:
+                            st.plotly_chart(prob_hist(results), use_container_width=True)
+                        
+                        st.dataframe(results.sort_values('Default_Probability', ascending=False))
+                        
+                        # Generate drift report
+                        if st.button("Generate Data Drift Report"):
+                            report_path = generate_drift_report(artifacts['reference_data'], results)
+                            if report_path:
+                                with open(report_path, "rb") as f:
+                                    st.download_button(
+                                        label="Download Drift Report",
+                                        data=f,
+                                        file_name="drift_report.html",
+                                        mime="text/html"
+                                    )
+                                st.success("Drift report generated")
+                                st.markdown(f"**Summary:** Comparison between training data and current batch")
+                            else:
+                                st.warning("Could not generate drift report")
+
+    with tab3:
+        st.header("Prediction Logs")
+        if os.path.exists("logs/predictions.log"):
+            with open("logs/predictions.log", "r") as f:
+                logs = f.read()
+            st.text_area("Log Contents", logs, height=400)
+        else:
+            st.info("No prediction logs found")
+
     with tab4:
         st.subheader("Model Explainability (SHAP)")
+        
         try:
             import shap
-        except ModuleNotFoundError:
-            with st.spinner("Installing SHAP... please wait ⏳"):
-                subprocess.run(["pip", "install", "shap==0.45.0", "numba<0.60", "numpy<2.0"], check=True)
-            import shap
-
-        try:
-            explainer = shap.TreeExplainer(artifacts['model'])
+            from shap import Explainer
+            
+            st.write("### Feature Importance (SHAP Summary)")
+            
+            # Sample data for explanation
             sample = artifacts['reference_data'].sample(200, random_state=42)
             processed = artifacts['preprocessor'].transform(sample)
-            shap_values = explainer.shap_values(processed)
-
-            st.write("### Feature Importance (SHAP Summary)")
-            fig = shap.summary_plot(shap_values, processed, show=False)
-            st.pyplot(bbox_inches='tight')
+            
+            # Create explainer
+            explainer = Explainer(artifacts['model'])
+            shap_values = explainer(processed)
+            
+            # Summary plot
+            fig, ax = plt.subplots()
+            shap.summary_plot(shap_values, processed, show=False)
+            st.pyplot(fig)
+            
+            # Optionally show waterfall plot for a specific example
+            st.write("### Individual Prediction Explanation")
+            example_idx = st.slider("Select example to explain", 0, len(sample)-1, 0)
+            fig2, ax2 = plt.subplots()
+            shap.plots.waterfall(shap_values[example_idx], show=False)
+            st.pyplot(fig2)
+            
+        except ImportError:
+            st.warning("SHAP explainability is not available because the SHAP library is not installed.")
+            if st.button("Install SHAP (requires internet connection)"):
+                with st.spinner("Installing SHAP... This may take a minute"):
+                    try:
+                        subprocess.run([sys.executable, "-m", "pip", "install", "shap"], check=True)
+                        st.success("SHAP installed successfully! Please refresh the page.")
+                        st.experimental_rerun()
+                    except Exception as e:
+                        st.error(f"Failed to install SHAP: {str(e)}")
+                        st.write("You can try installing it manually with: `pip install shap`")
         except Exception as e:
-            st.error(f"SHAP explainability failed: {e}")
+            st.error(f"Error generating SHAP explanations: {str(e)}")
             st.code(traceback.format_exc())
 
 if __name__ == "__main__":
