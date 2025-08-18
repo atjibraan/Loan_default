@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import joblib
 import os
+import shap
 import traceback
 import subprocess
 import sys
