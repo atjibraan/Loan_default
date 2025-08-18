@@ -1,4 +1,4 @@
-# APP3.py (fixed version)
+# APP3.py (final fixed version)
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -340,7 +340,8 @@ def main():
             st.text_area("Log Contents", logs, height=400)
         else:
             st.info("No prediction logs found")
-      with tab4:
+
+    with tab4:
         st.subheader("Model Explainability")
 
         try:
