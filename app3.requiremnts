@@ -19,6 +19,8 @@ seaborn>=0.13.0
 # Explainability / Monitoring
 shap==0.45.0
 evidently==0.4.33
+numba>=0.55.0
+
 
 # Logging & Utils
 cloudpickle>=3.0.0
