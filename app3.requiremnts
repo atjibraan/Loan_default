@@ -1,3 +1,8 @@
+# Build Essentials (for SHAP and other deps)
+pip>=24.0
+setuptools>=65.5.0
+wheel>=0.40.0
+
 # Core ML
 scikit-learn==1.6.1
 xgboost==2.0.3
@@ -18,12 +23,9 @@ seaborn>=0.13.0
 
 # Explainability / Monitoring
 shap==0.45.0
-evidently==0.4.33
 numba>=0.55.0
-
+evidently==0.4.33
 
 # Logging & Utils
 cloudpickle>=3.0.0
-
-# Deployment Stability
 python-dotenv>=1.0.1
