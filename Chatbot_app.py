@@ -638,8 +638,8 @@ def chatbot_interface(artifacts):
     # Define the conversation flow
     conversation_steps = [
         {"question": "What is your age?", "field": "Age", "type": "number", "min": 18, "max": 100},
-        {"question": "What is your annual income in dollars?", "field": "Income", "type": "number", "min": 1000, "max": 500000},
-        {"question": "How much loan are you requesting?", "field": "LoanAmount", "type": "number", "min": 500, "max": 200000},
+        {"question": "What is your annual income per annum?", "field": "Income", "type": "number", "min": 1000, "max": 500000000000},
+        {"question": "How much loan are you requesting?", "field": "LoanAmount", "type": "number", "min": 500, "max": 20000000000000},
         {"question": "What is your credit score?", "field": "CreditScore", "type": "number", "min": 300, "max": 850},
         {"question": "How many months have you been employed at your current job?", "field": "MonthsEmployed", "type": "number", "min": 0, "max": 600},
         {"question": "How many credit lines do you currently have?", "field": "NumCreditLines", "type": "number", "min": 0, "max": 50},
