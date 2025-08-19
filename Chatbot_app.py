@@ -1,107 +1,220 @@
-# app.py
+# chatbot_loan_default_multiturn.py
 import streamlit as st
 import pandas as pd
-import joblib
 import numpy as np
+import joblib
+import os
+import traceback
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler, OrdinalEncoder
+import plotly.graph_objects as go
 
-# ---------------------------
-# Load model & preprocessor
-# ---------------------------
+# ===== Configuration =====
+MODEL_PATH = 'loan_default_model.pkl'
+PREPROCESSOR_PATH = 'preprocessor.pkl'
+DEVELOPER_NAME = "Jibraan Attar"
+MODEL_VERSION = "2.0"
+MODEL_TRAIN_DATE = "2025-07-29"
+MAX_CSV_ROWS = 2000000
+MAX_FILE_SIZE_MB = 25
+
+NUMERICAL_FEATURES = [
+    'Age', 'Income', 'LoanAmount', 'CreditScore', 'MonthsEmployed',
+    'NumCreditLines', 'InterestRate', 'LoanTerm', 'DTIRatio'
+]
+CATEGORICAL_FEATURES = ['Education', 'EmploymentType', 'LoanPurpose']
+BINARY_FEATURES = ['MaritalStatus', 'HasMortgage', 'HasDependents', 'HasCoSigner']
+
+FEATURES_ORDER = [
+    'Age', 'Income', 'LoanAmount', 'CreditScore', 'MonthsEmployed',
+    'NumCreditLines', 'InterestRate', 'LoanTerm', 'DTIRatio', 'Education',
+    'EmploymentType', 'MaritalStatus', 'HasMortgage', 'HasDependents',
+    'LoanPurpose', 'HasCoSigner'
+]
+
+# ===== Preprocessor Class =====
+class Preprocessor(BaseEstimator, TransformerMixin):
+    def __init__(self):
+        self.column_transformer = ColumnTransformer(
+            transformers=[
+                ('num', StandardScaler(), NUMERICAL_FEATURES),
+                ('cat', OneHotEncoder(drop='first', sparse_output=False), CATEGORICAL_FEATURES),
+                ('bin', OrdinalEncoder(), BINARY_FEATURES)
+            ]
+        )
+
+    def fit(self, X, y=None):
+        self.column_transformer.fit(X)
+        return self
+
+    def transform(self, X):
+        return self.column_transformer.transform(X)
+
+# ===== Load Artifacts =====
 @st.cache_resource
-def load_model():
-    model = joblib.load("loan_default_model.pkl")
-    preprocessor = joblib.load("preprocessor.pkl")
-    return model, preprocessor
+def load_artifacts():
+    try:
+        model = joblib.load(MODEL_PATH)
+        preprocessor = joblib.load(PREPROCESSOR_PATH)
+        return {'model': model, 'preprocessor': preprocessor}
+    except Exception as e:
+        st.error(f"Error loading artifacts: {str(e)}")
+        with st.expander("Technical Details"):
+            st.code(traceback.format_exc())
+        st.stop()
 
-model, preprocessor = load_model()
-features = preprocessor.feature_names_in_
+# ===== Prediction =====
+def predict_default_probability(input_data, artifacts):
+    try:
+        for col in NUMERICAL_FEATURES:
+            input_data[col] = pd.to_numeric(input_data[col], errors='coerce')
+        processed_data = artifacts['preprocessor'].transform(input_data)
+        probabilities = artifacts['model'].predict_proba(processed_data)
+        return probabilities[:, 1]
+    except Exception as e:
+        st.error(f"Prediction error: {str(e)}")
+        with st.expander("Error details"):
+            st.code(traceback.format_exc())
+        return None
 
-# ---------------------------
-# Title
-# ---------------------------
-st.title("💰 Loan & Financial Advisory Chatbot")
-st.write("Assess loan default risk with interactive explanations.")
+# ===== Interactive Visuals =====
+def plot_gauge(probability):
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=float(probability),
+        title={'text': "Default Probability"},
+        gauge={'axis': {'range': [0, 1]}, 'bar': {'color': "orange"},
+               'steps': [
+                   {'range': [0, 0.5], 'color': "lightgreen"},
+                   {'range': [0.5, 1], 'color': "red"}]}
+    ))
+    fig.update_layout(height=300)
+    return fig
 
-# ---------------------------
-# Input Mode
-# ---------------------------
-input_mode = st.sidebar.selectbox("Choose Input Mode", ["Single Applicant", "CSV Batch Upload"])
+def plot_probability_bar(probability):
+    fig = go.Figure(data=[go.Bar(
+        x=['Default', 'No Default'],
+        y=[float(probability), 1 - float(probability)],
+        marker_color=['#ff7f0e', '#1f77b4']
+    )])
+    fig.update_layout(yaxis=dict(range=[0,1]), title='Probability Comparison')
+    return fig
 
-# =========================
-# Single Applicant Input
-# =========================
-if input_mode == "Single Applicant":
-    st.header("Enter Applicant Details")
-    user_input = {}
+def plot_risk_pie(df):
+    risk_counts = df['Risk_Classification'].value_counts()
+    fig = go.Figure(data=[go.Pie(
+        labels=risk_counts.index,
+        values=risk_counts.values,
+        hole=0.4,
+        marker_colors=['#ff7f0e','#1f77b4']
+    )])
+    fig.update_layout(title="Risk Distribution")
+    return fig
 
-    for f in features:
-        if "Age" in f or "Income" in f or "LoanAmount" in f or "CreditScore" in f or \
-           "MonthsEmployed" in f or "NumCreditLines" in f or "InterestRate" in f or \
-           "LoanTerm" in f or "DTIRatio" in f:
-            user_input[f] = st.number_input(f, value=0)
+# ===== Multi-turn Chatbot =====
+def chatbot_single_applicant(artifacts):
+    st.subheader("💬 Chatbot: Step-by-Step Applicant Info")
+    if 'answers' not in st.session_state:
+        st.session_state['answers'] = {}
+        st.session_state['step'] = 0
+
+    steps = [
+        ('Age', 'number', 35),
+        ('Income', 'number', 60000),
+        ('LoanAmount', 'number', 20000),
+        ('CreditScore', 'number', 700),
+        ('MonthsEmployed', 'number', 36),
+        ('NumCreditLines', 'number', 3),
+        ('InterestRate', 'number', 7.5),
+        ('LoanTerm', 'number', 36),
+        ('DTIRatio', 'number', 0.35),
+        ('Education', 'select', ["High School","Bachelor's","Master's","PhD"]),
+        ('EmploymentType', 'select', ["Full-time","Part-time","Self-employed","Unemployed"]),
+        ('LoanPurpose', 'select', ["Business","Home","Education","Auto"]),
+        ('MaritalStatus', 'select', ["Single","Married"]),
+        ('HasMortgage', 'select', ["No","Yes"]),
+        ('HasDependents', 'select', ["No","Yes"]),
+        ('HasCoSigner', 'select', ["No","Yes"])
+    ]
+
+    if st.session_state['step'] < len(steps):
+        feature, ftype, options = steps[st.session_state['step']]
+        st.write(f"**Bot:** Please enter your {feature}")
+        if ftype == 'number':
+            value = st.number_input(feature, value=options)
         else:
-            user_input[f] = st.selectbox(f, ["Low", "Medium", "High"])
+            value = st.selectbox(feature, options)
+        if st.button("Next"):
+            st.session_state['answers'][feature] = value
+            st.session_state['step'] += 1
+            st.experimental_rerun()
+    else:
+        st.write("✅ All information collected!")
+        df_input = pd.DataFrame([st.session_state['answers']])
+        prob_default = predict_default_probability(df_input, artifacts)[0]
+        prediction = "High Risk" if prob_default >= 0.5 else "Low Risk"
 
-    if st.button("Predict Risk"):
-        input_df = pd.DataFrame([user_input])
-        X = preprocessor.transform(input_df)
-        pred_proba = model.predict_proba(X)[:,1][0]
-        st.subheader(f"Predicted Default Risk: {pred_proba*100:.2f}%")
+        st.metric("Probability of Default", f"{prob_default:.2%}")
+        st.metric("Risk Classification", prediction)
 
-        # ---------------------------
-        # Feature impact explanation (alternative to SHAP)
-        # ---------------------------
-        st.subheader("Feature Impact Explanation")
-        mean_vals = np.mean(preprocessor.transform(pd.DataFrame(
-            np.random.randn(100, len(features)), columns=features)), axis=0)
-        input_vals = X[0]
-        impact_scores = input_vals - mean_vals
-        impact_df = pd.DataFrame({"Feature": features, "ImpactScore": impact_scores})
-        impact_df["ImpactAbs"] = impact_df["ImpactScore"].abs()
-        impact_df = impact_df.sort_values(by="ImpactAbs", ascending=False)
-        st.table(impact_df.head(5))
+        st.plotly_chart(plot_gauge(prob_default), use_container_width=True)
+        st.plotly_chart(plot_probability_bar(prob_default), use_container_width=True)
 
-        # ---------------------------
-        # Recommendations
-        # ---------------------------
-        st.subheader("Recommendations:")
-        if user_input.get("DTIRatio",0) > 0.4:
-            st.write("- Consider reducing your existing debt.")
-        if user_input.get("CreditScore",0) < 650:
-            st.write("- Work on improving your credit score.")
-        if user_input.get("MonthsEmployed",0) < 12:
-            st.write("- Stable employment history improves chances.")
-        st.write("These suggestions are informational only, not legal or financial advice.")
+        # Risk explanation
+        if prob_default >= 0.5:
+            st.error("⚠️ HIGH RISK ⚠️: Consider additional documentation or co-signer")
+        else:
+            st.success("✅ LOW RISK: Standard approval possible")
 
-# =========================
-# CSV Batch Upload
-# =========================
-if input_mode == "CSV Batch Upload":
-    st.header("Upload CSV for Batch Prediction")
-    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
+        # Reset button
+        if st.button("Start Over"):
+            st.session_state['answers'] = {}
+            st.session_state['step'] = 0
+            st.experimental_rerun()
+
+# ===== Batch Upload =====
+def batch_upload(artifacts):
+    st.subheader("Batch Processing")
+    uploaded_file = st.file_uploader("Upload CSV file", type="csv")
     if uploaded_file:
-        df = pd.read_csv(uploaded_file)
-        st.write("Preview of uploaded data:")
-        st.dataframe(df.head())
+        file_size = len(uploaded_file.getvalue())/(1024*1024)
+        if file_size>MAX_FILE_SIZE_MB:
+            st.error(f"File too large (> {MAX_FILE_SIZE_MB}MB)")
+            return
+        df = pd.read_csv(uploaded_file, nrows=MAX_CSV_ROWS)
+        if all(col in df.columns for col in FEATURES_ORDER):
+            probs = predict_default_probability(df[FEATURES_ORDER], artifacts)
+            df['Default_Probability'] = probs
+            df['Risk_Classification'] = np.where(df['Default_Probability']>=0.5,"High Risk","Low Risk")
+            st.success(f"Processed {len(df)} applicants")
+            st.dataframe(df)
+            st.plotly_chart(plot_risk_pie(df), use_container_width=True)
+            st.download_button("Download CSV", df.to_csv(index=False).encode('utf-8'), file_name="loan_predictions.csv")
+        else:
+            st.error("Uploaded CSV missing required columns")
 
-        if st.button("Predict Batch Risk"):
-            try:
-                X_batch = preprocessor.transform(df)
-                pred_probs = model.predict_proba(X_batch)[:,1]
-                df["DefaultRisk"] = pred_probs
-                st.subheader("Predictions:")
-                st.dataframe(df)
+# ===== Main App =====
+def main():
+    st.set_page_config(page_title="Loan Default Chatbot", layout="wide")
+    st.title("💬 Loan Default Multi-turn Chatbot")
 
-                # Feature impact explanation (batch)
-                mean_vals = np.mean(X_batch, axis=0)
-                impact_scores = np.mean(np.abs(X_batch - mean_vals), axis=0)
-                impact_df = pd.DataFrame({"Feature": features, "MeanImpact": impact_scores})
-                impact_df = impact_df.sort_values(by="MeanImpact", ascending=False)
-                st.subheader("Top Contributing Features (Batch Average):")
-                st.dataframe(impact_df.head(5))
+    artifacts = load_artifacts()
+    st.sidebar.header("Developer & Model Info")
+    st.sidebar.markdown(f"**Developer:** {DEVELOPER_NAME}")
+    st.sidebar.markdown(f"**Model Version:** {MODEL_VERSION}")
+    st.sidebar.markdown(f"**Trained on:** {MODEL_TRAIN_DATE}")
 
-                # Download predictions
-                csv = df.to_csv(index=False).encode('utf-8')
-                st.download_button("Download Predictions CSV", csv, "batch_predictions.csv", "text/csv")
-            except Exception as e:
-                st.error(f"Error processing CSV: {e}")
+    tab1, tab2 = st.tabs(["Single Applicant Chatbot", "Batch Upload"])
+    with tab1:
+        chatbot_single_applicant(artifacts)
+    with tab2:
+        batch_upload(artifacts)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        st.error("Critical error occurred!")
+        with st.expander("Error details"):
+            st.code(traceback.format_exc())
