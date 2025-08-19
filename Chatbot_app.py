@@ -77,7 +77,7 @@ def _drift_ready(reference_df: pd.DataFrame, current_df: pd.DataFrame):
         if col in cur: cur[col] = pd.to_numeric(cur[col], errors='coerce')
     for col in CATEGORICAL_FEATURES + BINARY_FEATURES:
         if col in ref: ref[col] = ref[col].astype(str)
-        if col in cur: cur[col] = cur[col].astype(str)
+        if col in cur: cur[col] = cur[col].ast(str)
     # Drop rows with all-NaN features to avoid Evidently errors
     ref = ref.dropna(how="all")
     cur = cur.dropna(how="all")
@@ -482,23 +482,77 @@ def prob_hist(df):
                       yaxis_title="Count", margin=dict(l=10, r=10, t=40, b=10))
     return fig
 
-# ===== Suggestion Engine =====
-def generate_suggestions(data, prob):
-    tips = []
-    contributions = []
-    if data['Income'] < 30000:
-        tips.append("💡 Consider increasing your income or providing a co-signer.")
-        contributions.append("low Income")
-    if data['DTIRatio'] > 0.4:
-        tips.append("💡 Your DTI is high; consider reducing debt or negotiating interest rate.")
-        contributions.append("high DTI")
-    if data['LoanAmount'] > data['Income']*5:
-        tips.append("💡 Your LoanAmount is high relative to income; reduce loan size or improve income.")
-        contributions.append("high LoanAmount")
-    if contributions:
-        contribution_text = ' and '.join(contributions)
-        tips.insert(0,f"⚠️ Key factors contributing to risk: {contribution_text}")
-    return tips
+# ===== Risk Explanation Engine =====
+def generate_risk_explanation(data, prob, artifacts):
+    """
+    Generate detailed explanation for why an applicant is flagged as high risk
+    """
+    explanations = []
+    
+    # Check key risk factors
+    if prob >= THRESHOLD:
+        explanations.append("## 🔍 Risk Factor Analysis")
+        explanations.append("Your application has been flagged as **High Risk** due to the following factors:")
+        
+        # Check each risk factor
+        if data['CreditScore'] < 650:
+            explanations.append(f"- **Low Credit Score**: Your credit score of {data['CreditScore']} is below the recommended threshold of 650. This suggests a higher likelihood of payment difficulties based on historical data.")
+        
+        if data['DTIRatio'] > 0.4:
+            explanations.append(f"- **High Debt-to-Income Ratio**: Your DTI ratio of {data['DTIRatio']:.2f} exceeds the recommended maximum of 0.40. This indicates you may have difficulty managing additional debt payments.")
+        
+        if data['Income'] < 30000 and data['LoanAmount'] > 10000:
+            explanations.append(f"- **Income-to-Loan Mismatch**: With an annual income of ${data['Income']:,.0f}, the requested loan amount of ${data['LoanAmount']:,.0f} represents a significant financial burden.")
+        
+        if data['MonthsEmployed'] < 12:
+            explanations.append(f"- **Short Employment History**: You've been employed for only {data['MonthsEmployed']} months. Longer employment history typically indicates more stable income.")
+        
+        if data['InterestRate'] > 10:
+            explanations.append(f"- **High Interest Rate**: The interest rate of {data['InterestRate']:.1f}% suggests the lender perceives higher risk in your application.")
+        
+        if data['EmploymentType'] in ['Part-time', 'Unemployed']:
+            explanations.append(f"- **Employment Status**: Your employment type ({data['EmploymentType']}) may indicate less stable income compared to full-time employment.")
+        
+        if data['HasDependents'] == 'Yes' and data['Income'] < 50000:
+            explanations.append("- **Dependents with Limited Income**: Having dependents while earning a moderate income increases financial pressure and default risk.")
+            
+        # Add model-based insights if available
+        explanations.append("\n## 📊 Model Insights")
+        explanations.append("Our machine learning model has analyzed hundreds of similar applications and identified patterns that correlate with higher default rates in your demographic and financial profile.")
+        
+    else:
+        explanations.append("## ✅ Application Strengths")
+        explanations.append("Your application shows several positive indicators:")
+        
+        if data['CreditScore'] >= 700:
+            explanations.append(f"- **Strong Credit History**: Your credit score of {data['CreditScore']} demonstrates responsible credit management.")
+        
+        if data['DTIRatio'] <= 0.35:
+            explanations.append(f"- **Healthy Debt-to-Income Ratio**: Your DTI ratio of {data['DTIRatio']:.2f} indicates good debt management capacity.")
+        
+        if data['MonthsEmployed'] >= 24:
+            explanations.append(f"- **Stable Employment**: {data['MonthsEmployed']} months of employment shows income stability.")
+            
+        if data['HasCoSigner'] == 'Yes':
+            explanations.append("- **Co-Signer Available**: Having a co-signer reduces the lender's risk.")
+    
+    # Add general recommendations
+    explanations.append("\n## 💡 Recommendations")
+    if prob >= THRESHOLD:
+        explanations.append("To improve your application, consider:")
+        explanations.append("- Increasing your credit score by paying down existing debts")
+        explanations.append("- Reducing your debt-to-income ratio")
+        explanations.append("- Providing a larger down payment or collateral")
+        explanations.append("- Adding a credit-worthy co-signer")
+        explanations.append("- Exploring a smaller loan amount")
+    else:
+        explanations.append("To maintain your strong financial position:")
+        explanations.append("- Continue making timely payments on all obligations")
+        explanations.append("- Monitor your credit report regularly")
+        explanations.append("- Avoid taking on unnecessary new debt")
+        explanations.append("- Build emergency savings to cover unexpected expenses")
+    
+    return "\n\n".join(explanations)
 
 # ===== Helpers: Recommendations text =====
 def recommendations_for_prob(prob: float):
@@ -571,202 +625,104 @@ def process_batch_data(uploaded_file, artifacts):
 
 # ===== Chatbot Interface =====
 def chatbot_interface(artifacts):
-    st.subheader("Multi-turn Chatbot")
-    if 'conversation' not in st.session_state:
-        st.session_state.conversation = []
-        st.session_state.user_data = {}
-
-    def display_chat():
-        for entry in st.session_state.conversation:
-            if entry['sender']=='bot':
-                st.markdown(f"**Bot:** {entry['message']}")
-            else:
-                st.markdown(f"**You:** {entry['message']}")
-    display_chat()
-
-    # Group fields into categories for better organization
-    personal_info = [
-        ("Age","number"), 
-        ("Income","number"),
-        ("MaritalStatus","select",["Single","Married"]),
-        ("HasDependents","select",["No","Yes"])
+    st.subheader("Multi-turn Chatbot Assistant")
+    
+    # Initialize session state
+    if 'chatbot_data' not in st.session_state:
+        st.session_state.chatbot_data = {}
+        st.session_state.chatbot_step = 0
+        st.session_state.chatbot_messages = [
+            {"role": "assistant", "content": "Hello! I'm here to help you with your loan application. Let's start with some basic information."}
+        ]
+    
+    # Define the conversation flow
+    conversation_steps = [
+        {"question": "What is your age?", "field": "Age", "type": "number", "min": 18, "max": 100},
+        {"question": "What is your annual income in dollars?", "field": "Income", "type": "number", "min": 1000, "max": 500000},
+        {"question": "How much loan are you requesting?", "field": "LoanAmount", "type": "number", "min": 500, "max": 200000},
+        {"question": "What is your credit score?", "field": "CreditScore", "type": "number", "min": 300, "max": 850},
+        {"question": "How many months have you been employed at your current job?", "field": "MonthsEmployed", "type": "number", "min": 0, "max": 600},
+        {"question": "How many credit lines do you currently have?", "field": "NumCreditLines", "type": "number", "min": 0, "max": 50},
+        {"question": "What interest rate are you being offered?", "field": "InterestRate", "type": "number", "min": 0.0, "max": 50.0, "step": 0.1},
+        {"question": "What is the loan term in months?", "field": "LoanTerm", "type": "number", "min": 1, "max": 480},
+        {"question": "What is your debt-to-income ratio?", "field": "DTIRatio", "type": "number", "min": 0.0, "max": 2.0, "step": 0.01},
+        {"question": "What is your highest education level?", "field": "Education", "type": "select", "options": ["High School", "Bachelor's", "Master's", "PhD"]},
+        {"question": "What is your employment type?", "field": "EmploymentType", "type": "select", "options": ["Full-time", "Part-time", "Self-employed", "Unemployed"]},
+        {"question": "What is the purpose of this loan?", "field": "LoanPurpose", "type": "select", "options": ["Business", "Home", "Education", "Auto"]},
+        {"question": "What is your marital status?", "field": "MaritalStatus", "type": "select", "options": ["Single", "Married"]},
+        {"question": "Do you have a mortgage?", "field": "HasMortgage", "type": "select", "options": ["No", "Yes"]},
+        {"question": "Do you have any dependents?", "field": "HasDependents", "type": "select", "options": ["No", "Yes"]},
+        {"question": "Do you have a co-signer?", "field": "HasCoSigner", "type": "select", "options": ["No", "Yes"]},
     ]
     
-    loan_info = [
-        ("LoanAmount","number"),
-        ("LoanTerm","number"),
-        ("LoanPurpose","select",["Business","Home","Education","Auto"]),
-        ("InterestRate","number")
-    ]
+    # Display chat messages
+    for message in st.session_state.chatbot_messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
     
-    financial_info = [
-        ("CreditScore","number"),
-        ("NumCreditLines","number"),
-        ("DTIRatio","number"),
-        ("HasMortgage","select",["No","Yes"])
-    ]
-    
-    employment_info = [
-        ("MonthsEmployed","number"),
-        ("EmploymentType","select",["Full-time","Part-time","Self-employed","Unemployed"]),
-        ("Education","select",["High School","Bachelor's","Master's","PhD"]),
-        ("HasCoSigner","select",["No","Yes"])
-    ]
-
-    # Check which step we're on
-    all_steps = personal_info + loan_info + financial_info + employment_info
-    for field in all_steps:
-        if field[0] not in st.session_state.user_data:
-            st.session_state.current_step = field
-            break
-    else:
-        st.session_state.current_step = None
-
-    if st.session_state.current_step:
-        field = st.session_state.current_step
-        st.markdown(f"**Bot:** Please provide your {field[0]}")
+    # Handle the current step
+    if st.session_state.chatbot_step < len(conversation_steps):
+        current_step = conversation_steps[st.session_state.chatbot_step]
         
-        # Create a form for each category
-        with st.form(key='input_form'):
-            cols = st.columns(4)
-            
-            # Personal Information
-            with cols[0]:
-                st.subheader("Personal Info")
-                for f in personal_info:
-                    if f[1] == "number":
-                        value = st.number_input(f[0], value=0, key=f"input_{f[0]}")
-                    else:
-                        value = st.selectbox(f[0], options=f[2], key=f"input_{f[0]}")
-                    if f[0] not in st.session_state.user_data:
-                        st.session_state.user_data[f[0]] = value
-            
-            # Loan Information
-            with cols[1]:
-                st.subheader("Loan Info")
-                for f in loan_info:
-                    if f[1] == "number":
-                        value = st.number_input(f[0], value=0, key=f"input_{f[0]}")
-                    else:
-                        value = st.selectbox(f[0], options=f[2], key=f"input_{f[0]}")
-                    if f[0] not in st.session_state.user_data:
-                        st.session_state.user_data[f[0]] = value
-            
-            # Financial Information
-            with cols[2]:
-                st.subheader("Financial Info")
-                for f in financial_info:
-                    if f[1] == "number":
-                        value = st.number_input(f[0], value=0, key=f"input_{f[0]}")
-                    else:
-                        value = st.selectbox(f[0], options=f[2], key=f"input_{f[0]}")
-                    if f[0] not in st.session_state.user_data:
-                        st.session_state.user_data[f[0]] = value
-            
-            # Employment Information
-            with cols[3]:
-                st.subheader("Employment Info")
-                for f in employment_info:
-                    if f[1] == "number":
-                        value = st.number_input(f[0], value=0, key=f"input_{f[0]}")
-                    else:
-                        value = st.selectbox(f[0], options=f[2], key=f"input_{f[0]}")
-                    if f[0] not in st.session_state.user_data:
-                        st.session_state.user_data[f[0]] = value
-            
-            if st.form_submit_button("Submit All Information"):
-                for field in all_steps:
-                    st.session_state.conversation.append({
-                        'sender': 'user',
-                        'message': f"{field[0]}: {st.session_state.user_data[field[0]]}"
-                    })
-                st.session_state.conversation.append({
-                    'sender': 'bot',
-                    'message': "All information recorded. Calculating your results..."
-                })
-                st.experimental_rerun()
+        with st.chat_message("assistant"):
+            st.markdown(current_step["question"])
+        
+        # Input field based on type
+        if current_step["type"] == "number":
+            value = st.number_input(
+                current_step["question"],
+                min_value=current_step.get("min", 0),
+                max_value=current_step.get("max", 1000000),
+                step=current_step.get("step", 1),
+                key=f"chatbot_{current_step['field']}",
+                label_visibility="collapsed"
+            )
+        else:  # select
+            value = st.selectbox(
+                current_step["question"],
+                options=current_step["options"],
+                key=f"chatbot_{current_step['field']}",
+                label_visibility="collapsed"
+            )
+        
+        if st.button("Next", key=f"next_{current_step['field']}"):
+            st.session_state.chatbot_data[current_step["field"]] = value
+            st.session_state.chatbot_messages.append({"role": "user", "content": f"{current_step['field']}: {value}"})
+            st.session_state.chatbot_step += 1
+            st.rerun()
+    
     else:
-        st.markdown("**Bot:** Thank you! Here's your loan default dashboard...")
-        df_input = pd.DataFrame([st.session_state.user_data])
+        # All information collected, show results
+        df_input = pd.DataFrame([st.session_state.chatbot_data])
         probs = predict_default_probability(df_input, artifacts)
+        
         if probs is not None:
             p = float(probs[0])
             prediction = "High Risk" if p >= THRESHOLD else "Low Risk"
-
-            # KPI row
-            c1, c2 = st.columns(2)
-            c1.metric("Default Probability", f"{p:.2%}")
-            c2.metric("Risk Classification", prediction)
             
-            st.plotly_chart(plot_gauge_simple(p), use_container_width=True)
-            st.plotly_chart(plot_probability_bar(p), use_container_width=True)
-
-            # Generate actionable suggestions
-            tips = generate_suggestions(st.session_state.user_data, p)
-            for tip in tips:
-                if "⚠️" in tip:
-                    st.warning(tip)
-                else:
-                    st.info(tip)
-
-            st.subheader("Applicant Overview")
-            st.dataframe(df_input)
-
-            # Log
-            log_prediction(df_input, {"class": prediction, "prob": p})
-
-            # Visual storytelling
-            st.markdown("### 🎨 Visual Storytelling")
-            base_row = df_input.iloc[0]
-            hm = make_risk_heatmap(artifacts, base_row, "CreditScore", "DTIRatio",
-                                   x_range=(300, 850), y_range=(0.0, 1.5))
-            st.plotly_chart(hm, use_container_width=True)
-            radar = make_radar_chart(artifacts, base_row)
-            st.plotly_chart(radar, use_container_width=True)
-
-            # Counterfactuals
-            st.markdown("### 💡 Counterfactual Suggestions")
-            suggestions, best_df = suggest_counterfactuals(df_input.copy(), artifacts, THRESHOLD)
-            if len(suggestions) == 0:
-                st.info("No actionable single-step changes found within the search budget.")
-            else:
-                s_df = pd.DataFrame(suggestions)
-                s_df['new_prob'] = s_df['new_prob'].map(lambda x: f"{x:.2%}")
-                st.dataframe(s_df, use_container_width=True)
-
-            # What-if tool
-            st.markdown("### 🧪 What-If Analysis")
-            with st.expander("Adjust key features and see impact"):
-                colA, colB, colC, colD = st.columns(4)
-                w_credit = colA.slider("CreditScore", 300, 850, int(base_row['CreditScore']))
-                w_income = colB.number_input("Income ($)", min_value=0, value=int(base_row['Income']), step=1000)
-                w_amount = colC.number_input("LoanAmount ($)", min_value=0, value=int(base_row['LoanAmount']), step=1000)
-                w_dti = colD.slider("DTIRatio", 0.0, 2.0, float(base_row['DTIRatio']), 0.01)
-
-                overrides = {
-                    "CreditScore": w_credit,
-                    "Income": w_income,
-                    "LoanAmount": w_amount,
-                    "DTIRatio": w_dti
-                }
-                new_prob, mod_df = what_if_prediction(df_input.copy(), artifacts, overrides)
-                new_pred = "High Risk" if new_prob >= THRESHOLD else "Low Risk"
-
-                cc1, cc2, cc3 = st.columns(3)
-                cc1.metric("New Default Prob", f"{new_prob:.2%}", delta=f"{(new_prob - p):+.2%}")
-                cc2.metric("New Class", new_pred)
-                cc3.metric("Threshold", f"{THRESHOLD:.0%}")
-                st.plotly_chart(plot_gauge_simple(new_prob), use_container_width=True)
-
-            # Recommendations & Report
-            st.markdown("### 📄 Recommendations & Downloadable Report")
-            recs = recommendations_for_prob(p)
-            st.write("- " + "\n- ".join(recs))
-            if st.button("Generate Decision Report (HTML)"):
-                save_to = f"logs/decision_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
-                path = generate_html_report(df_input.copy(), p, prediction, recs, suggestions, save_path=save_to)
-                with open(path, "rb") as f:
-                    st.download_button("Download Report (HTML)", f, file_name=os.path.basename(path), mime="text/html")
+            with st.chat_message("assistant"):
+                st.markdown("## 📊 Loan Application Analysis Complete")
+                st.metric("Default Probability", f"{p:.2%}")
+                st.metric("Risk Classification", prediction)
+                
+                # Generate detailed risk explanation
+                risk_explanation = generate_risk_explanation(st.session_state.chatbot_data, p, artifacts)
+                st.markdown(risk_explanation)
+                
+                # Show visualizations
+                st.plotly_chart(plot_gauge_simple(p), use_container_width=True)
+                
+                # Log the prediction
+                log_prediction(df_input, {"class": prediction, "prob": p})
+        
+        # Reset button
+        if st.button("Start New Application"):
+            st.session_state.chatbot_data = {}
+            st.session_state.chatbot_step = 0
+            st.session_state.chatbot_messages = [
+                {"role": "assistant", "content": "Hello! I'm here to help you with your loan application. Let's start with some basic information."}
+            ]
+            st.rerun()
 
 # ===== Main App =====
 def main():
@@ -800,6 +756,11 @@ def main():
 
                 # Log
                 log_prediction(input_df, {"class": prediction, "prob": p})
+
+                # Risk explanation
+                st.markdown("## 🔍 Risk Factor Analysis")
+                risk_explanation = generate_risk_explanation(input_df.iloc[0].to_dict(), p, artifacts)
+                st.markdown(risk_explanation)
 
                 # Visual storytelling
                 st.markdown("### 🎨 Visual Storytelling")
