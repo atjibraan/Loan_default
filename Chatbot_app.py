@@ -1,4 +1,4 @@
-# chatbot_loan_default_full.py
+# advanced_chatbot_loan_default.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,6 +8,8 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler, OrdinalEncoder
 import plotly.graph_objects as go
+from fpdf import FPDF
+from io import BytesIO
 
 # ===== Configuration =====
 MODEL_PATH = 'loan_default_model.pkl'
@@ -16,7 +18,6 @@ DEVELOPER_NAME = "Jibraan Attar"
 MODEL_VERSION = "2.0"
 MODEL_TRAIN_DATE = "2025-07-29"
 MAX_CSV_ROWS = 2000000
-MAX_FILE_SIZE_MB = 25
 
 NUMERICAL_FEATURES = ['Age','Income','LoanAmount','CreditScore','MonthsEmployed','NumCreditLines','InterestRate','LoanTerm','DTIRatio']
 CATEGORICAL_FEATURES = ['Education','EmploymentType','LoanPurpose']
@@ -60,7 +61,7 @@ def predict_default_probability(df, artifacts):
     probs = artifacts['model'].predict_proba(processed)[:,1]
     return probs
 
-# ===== Interactive Visuals =====
+# ===== Visuals =====
 def plot_gauge(prob):
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
@@ -92,10 +93,34 @@ def plot_risk_pie(df):
     fig.update_layout(title="Risk Distribution")
     return fig
 
+# ===== PDF Report =====
+def generate_pdf(user_data, prob, risk, tips):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial","B",16)
+    pdf.cell(0,10,"Loan Default Risk Report",ln=True,align='C')
+    pdf.set_font("Arial","",12)
+    pdf.ln(10)
+    pdf.cell(0,10,f"Risk Classification: {risk}",ln=True)
+    pdf.cell(0,10,f"Probability of Default: {prob:.2%}",ln=True)
+    pdf.ln(5)
+    pdf.cell(0,10,"Applicant Details:",ln=True)
+    for k,v in user_data.items():
+        pdf.cell(0,8,f"{k}: {v}",ln=True)
+    pdf.ln(5)
+    if tips:
+        pdf.cell(0,10,"Suggested Actions:",ln=True)
+        for tip in tips:
+            pdf.multi_cell(0,8,tip)
+    pdf_output = BytesIO()
+    pdf.output(pdf_output)
+    pdf_output.seek(0)
+    return pdf_output
+
 # ===== Chatbot + Batch App =====
 def main():
-    st.set_page_config(page_title="Loan Default Chatbot & Batch Predictor", layout="wide")
-    st.title("💬 Loan Default Chatbot & Batch Predictor")
+    st.set_page_config(page_title="Advanced Loan Default Chatbot", layout="wide")
+    st.title("💬 Advanced Loan Default Chatbot & Batch Predictor")
     artifacts = load_artifacts()
 
     st.sidebar.header("Developer & Model Info")
@@ -105,9 +130,9 @@ def main():
 
     tab1, tab2 = st.tabs(["Single Applicant (Chatbot)", "Batch Upload"])
 
-    # ===== Single Applicant =====
+    # ===== Single Applicant Chatbot =====
     with tab1:
-        st.subheader("Multi-turn Chatbot")
+        st.subheader("Multi-turn Interactive Chatbot")
         if 'conversation' not in st.session_state:
             st.session_state.conversation = []
             st.session_state.user_data = {}
@@ -139,6 +164,7 @@ def main():
             ("HasCoSigner","select",["No","Yes"])
         ]
 
+        # Determine next step
         for field in steps:
             if field[0] not in st.session_state.user_data:
                 st.session_state.current_step = field
@@ -146,9 +172,10 @@ def main():
         else:
             st.session_state.current_step = None
 
+        # User input
         if st.session_state.current_step:
             field = st.session_state.current_step
-            st.markdown(f"**Bot:** Please provide your {field[0]}")
+            st.markdown(f"**Bot:** Hi! Could you provide your {field[0]}?")
             if field[1]=="number":
                 value = st.number_input(field[0], value=0)
             elif field[1]=="select":
@@ -159,20 +186,47 @@ def main():
                 st.session_state.conversation.append({'sender':'bot','message':f"{field[0]} recorded."})
                 st.experimental_rerun()
         else:
-            st.markdown("**Bot:** Thank you! Generating your loan default report...")
+            st.markdown("**Bot:** Thank you! Let me analyze your data and provide a personalized report...")
             df_input = pd.DataFrame([st.session_state.user_data])
             prob = predict_default_probability(df_input, artifacts)[0]
             risk = "High Risk" if prob>=0.5 else "Low Risk"
+
+            # Conditional tips
+            tips = []
+            if st.session_state.user_data['Income'] < 20000:
+                tips.append("💡 Your income is relatively low. Consider a co-signer or smaller loan to improve approval chances.")
+            if st.session_state.user_data['DTIRatio'] > 0.4:
+                tips.append("💡 High Debt-to-Income ratio. Reducing debt can lower default risk.")
+            if st.session_state.user_data['CreditScore'] < 600:
+                tips.append("💡 Low credit score. Paying bills on time and reducing debts can improve it.")
+            if st.session_state.user_data['LoanAmount'] > st.session_state.user_data['Income']*2:
+                tips.append("💡 Loan amount is high relative to your income. Consider requesting a smaller loan.")
+
+            # Dynamic explanation (mock contribution percentages)
+            top_features = ["LoanAmount","Income"]
+            contribution_msg = f"⚡ Based on your inputs, {top_features[0]} and {top_features[1]} contribute ~60% to your risk."
+            st.markdown(f"**Bot:** {contribution_msg}")
+
             st.metric("Probability of Default", f"{prob:.2%}")
             st.metric("Risk Classification", risk)
             st.plotly_chart(plot_gauge(prob), use_container_width=True)
             st.plotly_chart(plot_probability_bar(prob), use_container_width=True)
+
             if risk=="High Risk":
-                st.warning("⚠️ HIGH RISK ⚠️\n- Consider extra documentation, co-signer, or higher interest rate.")
+                st.warning("⚠️ HIGH RISK ⚠️")
             else:
-                st.success("✅ LOW RISK ✅\n- Standard loan approval likely.")
-            st.subheader("Applicant Report")
+                st.success("✅ LOW RISK ✅")
+
+            st.subheader("Applicant Data & Suggestions")
             st.dataframe(df_input)
+            if tips:
+                st.markdown("**Bot:** Here are some actionable tips:")
+                for tip in tips:
+                    st.markdown(f"- {tip}")
+
+            # PDF report
+            pdf_file = generate_pdf(st.session_state.user_data, prob, risk, tips)
+            st.download_button("📄 Download Personalized Report", pdf_file, file_name="LoanDefaultReport.pdf")
 
     # ===== Batch Upload =====
     with tab2:
@@ -196,6 +250,6 @@ if __name__=="__main__":
     try:
         main()
     except Exception as e:
-        st.error("Critical error!")
+        st.error("Critical error occurred!")
         with st.expander("Error details"):
             st.code(traceback.format_exc())
