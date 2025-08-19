@@ -728,8 +728,8 @@ def get_user_input():
         st.header("Applicant Information")
         col1, col2, col3 = st.columns(3)
         age = col1.number_input("Age", 18, 100, 35)
-        income = col2.number_input("Annual Income ($)", 1000, 500000000, 600000000000)
-        loan_amount = col3.number_input("Loan Amount ($)", 500, 200000000, 200000000000000)
+        income = col2.number_input("Annual Income ($)", 1000, 500000000, 60000000)
+        loan_amount = col3.number_input("Loan Amount ($)", 500, 200000000, 200000000)
 
         col1, col2, col3 = st.columns(3)
         credit_score = col1.number_input("Credit Score", 300, 850, 700)
