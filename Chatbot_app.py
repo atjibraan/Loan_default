@@ -14,22 +14,26 @@ from sklearn.base import BaseEstimator, TransformerMixin
 # Plotly for interactive visuals
 import plotly.graph_objects as go
 import plotly.express as px
+import plotly.figure_factory as ff
 
 # Evidently for monitoring
 from evidently.report import Report
-from evidently.metric_preset import DataDriftPreset
+from evidently.metric_preset import DataDriftPreset, TargetDriftPreset
+from evidently.metrics import *
+from evidently.pipeline.column_mapping import ColumnMapping
 
 # ===== Configuration =====
 MODEL_PATH = 'loan_default_model.pkl'
 PREPROCESSOR_PATH = 'preprocessor.pkl'
 REFERENCE_DATA_PATH = "X_train.csv"
+TARGET_DATA_PATH = "y_train.csv"
 DEVELOPER_NAME = "Jibraan Attar"
 MODEL_VERSION = "2.0"
 MODEL_TRAIN_DATE = "2025-07-29"
 MAX_CSV_ROWS = 20000000000
 MAX_FILE_SIZE_MB = 25
-MIN_DRIFT_ROWS = 30       # Skip drift if fewer rows than this
-THRESHOLD = 0.50          # Risk cut-off
+MIN_DRIFT_ROWS = 30
+THRESHOLD = 0.50
 
 # Feature definitions
 NUMERICAL_FEATURES = [
@@ -42,6 +46,7 @@ FEATURES_ORDER = NUMERICAL_FEATURES + CATEGORICAL_FEATURES + BINARY_FEATURES
 
 # ===== Logging Setup =====
 os.makedirs("logs", exist_ok=True)
+os.makedirs("drift_reports", exist_ok=True)
 import logging
 logging.basicConfig(
     filename="logs/predictions.log",
@@ -58,51 +63,228 @@ def log_prediction(input_data, prediction):
 
 # ===== Utilities =====
 def _strip_aux_columns(df: pd.DataFrame) -> pd.DataFrame:
-    # Drop stray index/name columns like Unnamed: 0, LoanID, etc.
     cols = [c for c in df.columns if not c.startswith("Unnamed")]
     df = df[cols]
-    # Keep only features we expect
     keep = [c for c in df.columns if c in FEATURES_ORDER]
     df = df[keep]
-    # Reindex to bring columns in exact order (missing ones will be added as NaN)
     df = df.reindex(columns=FEATURES_ORDER)
     return df
 
 def _drift_ready(reference_df: pd.DataFrame, current_df: pd.DataFrame):
     ref = _strip_aux_columns(reference_df.copy())
     cur = _strip_aux_columns(current_df.copy())
-    # Basic type harmonization
     for col in NUMERICAL_FEATURES:
         if col in ref: ref[col] = pd.to_numeric(ref[col], errors='coerce')
         if col in cur: cur[col] = pd.to_numeric(cur[col], errors='coerce')
     for col in CATEGORICAL_FEATURES + BINARY_FEATURES:
         if col in ref: ref[col] = ref[col].astype(str)
-        if col in cur: cur[col] = cur[col].ast(str)
-    # Drop rows with all-NaN features to avoid Evidently errors
+        if col in cur: cur[col] = cur[col].astype(str)
     ref = ref.dropna(how="all")
     cur = cur.dropna(how="all")
     return ref, cur
 
 def generate_drift_report(reference_data, new_data, report_name="drift_report"):
-    """Generate and save drift report with Evidently. Skips when too few rows."""
+    """Generate and save drift report with Evidently."""
     try:
-        # Prepare and align data
         reference_data, new_data = _drift_ready(reference_data, new_data)
 
-        # Skip if too few rows
         if len(new_data) < MIN_DRIFT_ROWS:
             logging.info(f"Skipped drift report: only {len(new_data)} rows (< {MIN_DRIFT_ROWS}).")
-            return None
+            return None, None
 
-        report = Report(metrics=[DataDriftPreset()])
-        report.run(reference_data=reference_data, current_data=new_data)
-        report_path = f"logs/{report_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+        column_mapping = ColumnMapping()
+        column_mapping.numerical_features = NUMERICAL_FEATURES
+        column_mapping.categorical_features = CATEGORICAL_FEATURES + BINARY_FEATURES
+        
+        report = Report(metrics=[
+            DataDriftPreset(),
+            DatasetSummaryMetric(),
+            ColumnSummaryMetric(column_name='CreditScore'),
+            ColumnSummaryMetric(column_name='Income'),
+            ColumnSummaryMetric(column_name='DTIRatio'),
+        ])
+        
+        report.run(
+            reference_data=reference_data, 
+            current_data=new_data,
+            column_mapping=column_mapping
+        )
+        
+        report_path = f"drift_reports/{report_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
         report.save_html(report_path)
         logging.info(f"Drift report saved: {report_path}")
-        return report_path
+        return report_path, report
     except Exception as e:
         logging.error(f"Error generating drift report: {str(e)}")
-        return None
+        return None, None
+
+def generate_target_drift_report(reference_data, current_data, target_column, report_name="target_drift_report"):
+    """Generate target drift report"""
+    try:
+        if len(current_data) < MIN_DRIFT_ROWS:
+            return None, None
+            
+        column_mapping = ColumnMapping()
+        column_mapping.target = target_column
+        column_mapping.prediction = 'prediction'
+        column_mapping.numerical_features = NUMERICAL_FEATURES
+        column_mapping.categorical_features = CATEGORICAL_FEATURES + BINARY_FEATURES
+        
+        report = Report(metrics=[TargetDriftPreset()])
+        report.run(
+            reference_data=reference_data,
+            current_data=current_data,
+            column_mapping=column_mapping
+        )
+        
+        report_path = f"drift_reports/{report_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+        report.save_html(report_path)
+        return report_path, report
+    except Exception as e:
+        logging.error(f"Error generating target drift report: {str(e)}")
+        return None, None
+
+def visualize_drift_metrics(reference_data, current_data, artifacts):
+    """Create visualizations for data drift analysis"""
+    try:
+        if len(current_data) < 5:
+            return None
+            
+        ref, cur = _drift_ready(reference_data, current_data)
+        
+        drift_tab1, drift_tab2, drift_tab3, drift_tab4 = st.tabs([
+            "Distribution Comparison", "Statistical Tests", "Feature Drift", "Correlation Changes"
+        ])
+        
+        with drift_tab1:
+            st.subheader("Feature Distribution Comparison")
+            selected_feature = st.selectbox("Select feature to compare", NUMERICAL_FEATURES)
+            
+            if selected_feature in ref.columns and selected_feature in cur.columns:
+                fig = ff.create_distplot(
+                    [ref[selected_feature].dropna(), cur[selected_feature].dropna()],
+                    ['Reference', 'Current'],
+                    show_hist=False,
+                    show_rug=False
+                )
+                fig.update_layout(
+                    title=f"Distribution of {selected_feature}",
+                    xaxis_title=selected_feature,
+                    yaxis_title="Density"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Reference Mean", f"{ref[selected_feature].mean():.2f}")
+                    st.metric("Reference Std", f"{ref[selected_feature].std():.2f}")
+                with col2:
+                    st.metric("Current Mean", f"{cur[selected_feature].mean():.2f}", 
+                             delta=f"{(cur[selected_feature].mean() - ref[selected_feature].mean()):.2f}")
+                    st.metric("Current Std", f"{cur[selected_feature].std():.2f}", 
+                             delta=f"{(cur[selected_feature].std() - ref[selected_feature].std()):.2f}")
+        
+        with drift_tab2:
+            st.subheader("Statistical Drift Tests")
+            
+            drift_scores = {}
+            for feature in NUMERICAL_FEATURES:
+                if feature in ref.columns and feature in cur.columns:
+                    from scipy.stats import ks_2samp
+                    stat, p_value = ks_2samp(ref[feature].dropna(), cur[feature].dropna())
+                    drift_scores[feature] = p_value
+            
+            drift_df = pd.DataFrame.from_dict(drift_scores, orient='index', columns=['p_value'])
+            drift_df['Drift_Detected'] = drift_df['p_value'] < 0.05
+            drift_df['-log(p_value)'] = -np.log10(drift_df['p_value'] + 1e-10)
+            
+            fig = px.bar(drift_df, x=drift_df.index, y='-log(p_value)', 
+                         color='Drift_Detected',
+                         title="Statistical Drift Detection (-log p-value)")
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.dataframe(drift_df.sort_values('p_value'))
+        
+        with drift_tab3:
+            st.subheader("Feature-wise Drift Analysis")
+            
+            features = []
+            drift_scores = []
+            for feature in NUMERICAL_FEATURES:
+                if feature in ref.columns and feature in cur.columns:
+                    from scipy.stats import wasserstein_distance
+                    distance = wasserstein_distance(ref[feature].dropna(), cur[feature].dropna())
+                    features.append(feature)
+                    drift_scores.append(distance)
+            
+            drift_scores = np.array(drift_scores)
+            if len(drift_scores) > 0:
+                drift_scores = drift_scores / np.max(drift_scores)
+                
+                fig = px.bar(x=features, y=drift_scores, 
+                            title="Normalized Feature Drift Scores (Wasserstein Distance)")
+                st.plotly_chart(fig, use_container_width=True)
+        
+        with drift_tab4:
+            st.subheader("Correlation Changes")
+            
+            ref_corr = ref[NUMERICAL_FEATURES].corr()
+            cur_corr = cur[NUMERICAL_FEATURES].corr()
+            
+            corr_diff = cur_corr - ref_corr
+            
+            fig = px.imshow(corr_diff, 
+                           title="Correlation Matrix Difference (Current - Reference)",
+                           aspect="auto")
+            st.plotly_chart(fig, use_container_width=True)
+            
+        return True
+    except Exception as e:
+        st.error(f"Error creating drift visualizations: {str(e)}")
+        return False
+
+def generate_drift_summary(report):
+    """Generate a summary of drift findings"""
+    try:
+        summary = []
+        
+        summary.append("## 📊 Data Drift Analysis Summary")
+        summary.append(f"**Report Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        summary.append("")
+        
+        summary.append("### Key Findings")
+        
+        dataset_drift = False
+        drifted_features = []
+        
+        if hasattr(report, '_inner_suite'):
+            metrics = report._inner_suite.workspace[0][0].metrics
+            for metric in metrics:
+                if hasattr(metric, 'dataset_drift') and metric.dataset_drift:
+                    dataset_drift = True
+                if hasattr(metric, 'drift_by_columns'):
+                    for col, drift_info in metric.drift_by_columns.items():
+                        if hasattr(drift_info, 'drift_detected') and drift_info.drift_detected:
+                            drifted_features.append(col)
+        
+        summary.append(f"- **Dataset Drift Detected:** {'Yes' if dataset_drift else 'No'}")
+        summary.append(f"- **Number of Drifted Features:** {len(drifted_features)}")
+        if drifted_features:
+            summary.append(f"- **Drifted Features:** {', '.join(drifted_features[:5])}{'...' if len(drifted_features) > 5 else ''}")
+        
+        summary.append("")
+        summary.append("### Recommendations")
+        if dataset_drift or len(drifted_features) > 0:
+            summary.append("- ⚠️ **Model Retraining Recommended**: Significant data drift detected")
+            summary.append("- 🔍 **Monitor Closely**: Keep tracking these features for changes")
+            summary.append("- 📈 **Update Features**: Consider feature engineering or collection changes")
+        else:
+            summary.append("- ✅ **Model Stability**: No significant data drift detected")
+            summary.append("- 📊 **Continue Monitoring**: Regular checks are still recommended")
+        
+        return "\n".join(summary)
+    except Exception as e:
+        return f"## 📊 Data Drift Analysis\n\nError generating summary: {str(e)}"
 
 # ===== Preprocessor Class =====
 from sklearn.compose import ColumnTransformer
@@ -142,7 +324,10 @@ def load_artifacts():
         'preprocessor': joblib.load(PREPROCESSOR_PATH),
         'reference_data': pd.read_csv(REFERENCE_DATA_PATH)
     }
-    # Clean the reference once
+    
+    if os.path.exists(TARGET_DATA_PATH):
+        artifacts['target_data'] = pd.read_csv(TARGET_DATA_PATH)
+    
     artifacts['reference_data'] = _strip_aux_columns(artifacts['reference_data'])
     return artifacts
 
@@ -165,22 +350,18 @@ def get_transformed_feature_names(preprocessor: Preprocessor):
     try:
         return list(preprocessor.column_transformer.get_feature_names_out())
     except Exception:
-        # Fallback: basic names
         names = []
         names += [f"num__{c}" for c in NUMERICAL_FEATURES]
-        # For categorical, OneHotEncoder(drop='first') -> k-1 columns, but names unknown here
         names += ["cat__"] * len(CATEGORICAL_FEATURES)
         names += [f"bin__{c}" for c in BINARY_FEATURES]
         return names
 
 def plot_model_feature_importance(artifacts, top_n=20):
-    """Use model-native feature_importances_ if available; else show a notice."""
     model = artifacts['model']
     pre = artifacts['preprocessor']
     if hasattr(model, "feature_importances_"):
         importances = model.feature_importances_
         feat_names = get_transformed_feature_names(pre)
-        # Align length if needed
         n = min(len(importances), len(feat_names))
         s = pd.Series(importances[:n], index=feat_names[:n]).sort_values(ascending=False).head(top_n)
         fig = px.bar(s[::-1], orientation='h', title="Global Feature Importance (Model-based)",
@@ -194,15 +375,10 @@ def plot_model_feature_importance(artifacts, top_n=20):
         return fig
 
 def suggest_counterfactuals(input_df: pd.DataFrame, artifacts, threshold=THRESHOLD, max_iters=20):
-    """
-    Simple heuristic search: nudge numeric features in directions likely to reduce default risk.
-    Returns suggestions (list of dict) and the best adjusted row (DataFrame of 1 row).
-    """
     row = input_df.iloc[0].copy()
     best_row = row.copy()
     best_prob = float(predict_default_probability(pd.DataFrame([row]), artifacts)[0])
 
-    # Define directions: +1 to increase, -1 to decrease, 0 ignore
     directions = {
         "CreditScore": +1,
         "Income": +1,
@@ -210,11 +386,11 @@ def suggest_counterfactuals(input_df: pd.DataFrame, artifacts, threshold=THRESHO
         "LoanAmount": -1,
         "InterestRate": -1,
         "DTIRatio": -1,
-        "NumCreditLines": -1,  # assume fewer lines may help
+        "NumCreditLines": -1,
         "Age": 0,
-        "LoanTerm": 0,  # ambiguous (longer term can reduce payment burden but raise risk)
+        "LoanTerm": 0,
     }
-    # Step sizes (fraction of current or absolute)
+    
     frac_step = {
         "Income": 0.10,
         "LoanAmount": 0.10,
@@ -240,7 +416,6 @@ def suggest_counterfactuals(input_df: pd.DataFrame, artifacts, threshold=THRESHO
                 delta = abs_step.get(feat, 1.0)
 
             candidate[feat] = candidate[feat] + direction * delta
-            # Bounds
             if feat == "CreditScore":
                 candidate[feat] = float(np.clip(candidate[feat], 300, 850))
             if feat == "DTIRatio":
@@ -269,7 +444,6 @@ def suggest_counterfactuals(input_df: pd.DataFrame, artifacts, threshold=THRESHO
     return suggestions, pd.DataFrame([best_row])
 
 def what_if_prediction(base_df: pd.DataFrame, artifacts, overrides: dict):
-    """Apply overrides to base_df (single row) and return new prob."""
     modified = base_df.copy()
     for k, v in overrides.items():
         if k in modified.columns:
@@ -280,9 +454,6 @@ def what_if_prediction(base_df: pd.DataFrame, artifacts, overrides: dict):
 def make_risk_heatmap(artifacts, base_row: pd.Series,
                       x_feat="CreditScore", y_feat="DTIRatio",
                       x_range=(300, 850), y_range=(0.0, 1.5), x_steps=40, y_steps=40):
-    """
-    Score a grid varying two features; hold others at base_row.
-    """
     xs = np.linspace(x_range[0], x_range[1], x_steps)
     ys = np.linspace(y_range[0], y_range[1], y_steps)
     grid = []
@@ -305,7 +476,6 @@ def make_risk_heatmap(artifacts, base_row: pd.Series,
         xaxis_title=x_feat, yaxis_title=y_feat,
         height=500, margin=dict(l=10, r=10, t=40, b=10)
     )
-    # mark applicant
     fig.add_trace(go.Scatter(
         x=[base_row[x_feat]], y=[base_row[y_feat]],
         mode="markers", marker=dict(size=10, line=dict(width=1, color="black")),
@@ -314,14 +484,7 @@ def make_risk_heatmap(artifacts, base_row: pd.Series,
     return fig
 
 def make_radar_chart(artifacts, input_row: pd.Series, threshold=THRESHOLD):
-    """
-    Compare applicant vs. pseudo cohorts derived from reference_data using model predictions:
-    - Defaulters: prob >= threshold
-    - Non-defaulters: prob < threshold
-    Normalize numeric features to 0-1 based on reference_data min/max.
-    """
     ref = artifacts['reference_data'].copy()
-    # Need to predict probabilities on ref to build cohorts
     probs_ref = predict_default_probability(ref.copy(), artifacts)
     if probs_ref is None:
         fig = go.Figure()
@@ -331,11 +494,10 @@ def make_radar_chart(artifacts, input_row: pd.Series, threshold=THRESHOLD):
     def_cohort = ref[ref['prob'] >= threshold]
     nondef_cohort = ref[ref['prob'] < threshold]
 
-    # Normalize numeric features
     cats = CATEGORICAL_FEATURES + BINARY_FEATURES
     num = NUMERICAL_FEATURES
     mins = ref[num].min()
-    maxs = ref[num].max().replace(0, 1)  # avoid zero range
+    maxs = ref[num].max().replace(0, 1)
     def_mean = def_cohort[num].mean()
     nondef_mean = nondef_cohort[num].mean()
 
@@ -346,7 +508,7 @@ def make_radar_chart(artifacts, input_row: pd.Series, threshold=THRESHOLD):
     def_norm = norm(def_mean)
     nondef_norm = norm(nondef_mean)
 
-    categories = num + [num[0]]  # close the loop
+    categories = num + [num[0]]
     applicant_vals = list(applicant_norm.values) + [applicant_norm.values[0]]
     def_vals = list(def_norm.values) + [def_norm.values[0]]
     nondef_vals = list(nondef_norm.values) + [nondef_norm.values[0]]
@@ -365,9 +527,6 @@ def make_radar_chart(artifacts, input_row: pd.Series, threshold=THRESHOLD):
 
 def generate_html_report(input_df: pd.DataFrame, prob: float, classification: str,
                          recommendations: list, suggestions: list, save_path: str):
-    """
-    Create a lightweight HTML report (no external deps) and save to disk.
-    """
     row = input_df.iloc[0].to_dict()
     rec_html = "".join([f"<li>{r}</li>" for r in recommendations])
     sug_html = "".join([f"<li><b>{s['feature']}</b>: {s['from']} → {s['to']} (new p={s['new_prob']:.2%})</li>" for s in suggestions])
@@ -484,17 +643,12 @@ def prob_hist(df):
 
 # ===== Risk Explanation Engine =====
 def generate_risk_explanation(data, prob, artifacts):
-    """
-    Generate detailed explanation for why an applicant is flagged as high risk
-    """
     explanations = []
     
-    # Check key risk factors
     if prob >= THRESHOLD:
         explanations.append("## 🔍 Risk Factor Analysis")
         explanations.append("Your application has been flagged as **High Risk** due to the following factors:")
         
-        # Check each risk factor
         if data['CreditScore'] < 650:
             explanations.append(f"- **Low Credit Score**: Your credit score of {data['CreditScore']} is below the recommended threshold of 650. This suggests a higher likelihood of payment difficulties based on historical data.")
         
@@ -516,7 +670,6 @@ def generate_risk_explanation(data, prob, artifacts):
         if data['HasDependents'] == 'Yes' and data['Income'] < 50000:
             explanations.append("- **Dependents with Limited Income**: Having dependents while earning a moderate income increases financial pressure and default risk.")
             
-        # Add model-based insights if available
         explanations.append("\n## 📊 Model Insights")
         explanations.append("Our machine learning model has analyzed hundreds of similar applications and identified patterns that correlate with higher default rates in your demographic and financial profile.")
         
@@ -536,7 +689,6 @@ def generate_risk_explanation(data, prob, artifacts):
         if data['HasCoSigner'] == 'Yes':
             explanations.append("- **Co-Signer Available**: Having a co-signer reduces the lender's risk.")
     
-    # Add general recommendations
     explanations.append("\n## 💡 Recommendations")
     if prob >= THRESHOLD:
         explanations.append("To improve your application, consider:")
@@ -627,7 +779,6 @@ def process_batch_data(uploaded_file, artifacts):
 def chatbot_interface(artifacts):
     st.subheader("Multi-turn Chatbot Assistant")
     
-    # Initialize session state
     if 'chatbot_data' not in st.session_state:
         st.session_state.chatbot_data = {}
         st.session_state.chatbot_step = 0
@@ -635,11 +786,10 @@ def chatbot_interface(artifacts):
             {"role": "assistant", "content": "Hello! I'm here to help you with your loan application. Let's start with some basic information."}
         ]
     
-    # Define the conversation flow
     conversation_steps = [
         {"question": "What is your age?", "field": "Age", "type": "number", "min": 18, "max": 100},
-        {"question": "What is your annual income per annum?", "field": "Income", "type": "number", "min": 1000, "max": 500000000000},
-        {"question": "How much loan are you requesting?", "field": "LoanAmount", "type": "number", "min": 500, "max": 20000000000000},
+        {"question": "What is your annual income in dollars?", "field": "Income", "type": "number", "min": 1000, "max": 500000},
+        {"question": "How much loan are you requesting?", "field": "LoanAmount", "type": "number", "min": 500, "max": 200000},
         {"question": "What is your credit score?", "field": "CreditScore", "type": "number", "min": 300, "max": 850},
         {"question": "How many months have you been employed at your current job?", "field": "MonthsEmployed", "type": "number", "min": 0, "max": 600},
         {"question": "How many credit lines do you currently have?", "field": "NumCreditLines", "type": "number", "min": 0, "max": 50},
@@ -655,19 +805,16 @@ def chatbot_interface(artifacts):
         {"question": "Do you have a co-signer?", "field": "HasCoSigner", "type": "select", "options": ["No", "Yes"]},
     ]
     
-    # Display chat messages
     for message in st.session_state.chatbot_messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
     
-    # Handle the current step
     if st.session_state.chatbot_step < len(conversation_steps):
         current_step = conversation_steps[st.session_state.chatbot_step]
         
         with st.chat_message("assistant"):
             st.markdown(current_step["question"])
         
-        # Input field based on type
         if current_step["type"] == "number":
             value = st.number_input(
                 current_step["question"],
@@ -677,7 +824,7 @@ def chatbot_interface(artifacts):
                 key=f"chatbot_{current_step['field']}",
                 label_visibility="collapsed"
             )
-        else:  # select
+        else:
             value = st.selectbox(
                 current_step["question"],
                 options=current_step["options"],
@@ -692,7 +839,6 @@ def chatbot_interface(artifacts):
             st.rerun()
     
     else:
-        # All information collected, show results
         df_input = pd.DataFrame([st.session_state.chatbot_data])
         probs = predict_default_probability(df_input, artifacts)
         
@@ -705,17 +851,13 @@ def chatbot_interface(artifacts):
                 st.metric("Default Probability", f"{p:.2%}")
                 st.metric("Risk Classification", prediction)
                 
-                # Generate detailed risk explanation
                 risk_explanation = generate_risk_explanation(st.session_state.chatbot_data, p, artifacts)
                 st.markdown(risk_explanation)
                 
-                # Show visualizations
                 st.plotly_chart(plot_gauge_simple(p), use_container_width=True)
                 
-                # Log the prediction
                 log_prediction(df_input, {"class": prediction, "prob": p})
         
-        # Reset button
         if st.button("Start New Application"):
             st.session_state.chatbot_data = {}
             st.session_state.chatbot_step = 0
@@ -729,14 +871,15 @@ def main():
     st.set_page_config(page_title="Loan Default Predictor", page_icon="💰", layout="wide")
     artifacts = load_artifacts()
 
-    st.title("Loan Default Risk Assessment with Monitoring")
+    st.title("Loan Default Risk Assessment with Advanced Monitoring")
     st.caption(f"Developer: **{DEVELOPER_NAME}** | Model v{MODEL_VERSION} (trained {MODEL_TRAIN_DATE})")
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "Single Application", "Chatbot Interface", "Batch Processing", "Prediction Logs", "Explainability"
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "Single Application", "Chatbot Interface", "Batch Processing", 
+        "Prediction Logs", "Explainability", "Drift Monitoring"
     ])
 
-    # ---- Single Application
+    # ---- Single Application ----
     with tab1:
         input_df = get_user_input()
         if input_df is not None:
@@ -745,24 +888,19 @@ def main():
                 p = float(probs[0])
                 prediction = "High Risk" if p >= THRESHOLD else "Low Risk"
 
-                # KPI row
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Default Probability", f"{p:.2%}")
                 c2.metric("Risk Classification", prediction)
                 c3.metric("Threshold", f"{THRESHOLD:.0%}")
 
-                # Gauge
                 st.plotly_chart(gauge_probability(p), use_container_width=True)
 
-                # Log
                 log_prediction(input_df, {"class": prediction, "prob": p})
 
-                # Risk explanation
                 st.markdown("## 🔍 Risk Factor Analysis")
                 risk_explanation = generate_risk_explanation(input_df.iloc[0].to_dict(), p, artifacts)
                 st.markdown(risk_explanation)
 
-                # Visual storytelling
                 st.markdown("### 🎨 Visual Storytelling")
                 base_row = input_df.iloc[0]
                 hm = make_risk_heatmap(artifacts, base_row, "CreditScore", "DTIRatio",
@@ -771,7 +909,6 @@ def main():
                 radar = make_radar_chart(artifacts, base_row)
                 st.plotly_chart(radar, use_container_width=True)
 
-                # Counterfactuals
                 st.markdown("### 💡 Counterfactual Suggestions")
                 suggestions, best_df = suggest_counterfactuals(input_df.copy(), artifacts, THRESHOLD)
                 if len(suggestions) == 0:
@@ -781,7 +918,6 @@ def main():
                     s_df['new_prob'] = s_df['new_prob'].map(lambda x: f"{x:.2%}")
                     st.dataframe(s_df, use_container_width=True)
 
-                # What-if tool
                 st.markdown("### 🧪 What-If Analysis")
                 with st.expander("Adjust key features and see impact"):
                     colA, colB, colC, colD = st.columns(4)
@@ -805,21 +941,18 @@ def main():
                     cc3.metric("Threshold", f"{THRESHOLD:.0%}")
                     st.plotly_chart(gauge_probability(new_prob), use_container_width=True)
 
-                # Drift (skips if < MIN_DRIFT_ROWS)
-                report_path = generate_drift_report(artifacts['reference_data'], input_df, "single_app")
+                report_path, report = generate_drift_report(artifacts['reference_data'], input_df, "single_app")
                 if report_path:
                     st.success("Data drift report generated.")
                     with open(report_path, "rb") as f:
                         st.download_button("Download Drift Report (HTML)", f,
                                            file_name=os.path.basename(report_path), key="single_html")
-                    # Inline preview
                     with open(report_path, "r", encoding="utf-8") as f:
                         html = f.read()
                     components.html(html, height=600, scrolling=True)
                 else:
                     st.info(f"Drift check skipped (need at least {MIN_DRIFT_ROWS} rows).")
 
-                # Recommendations & Report
                 st.markdown("### 📄 Recommendations & Downloadable Report")
                 recs = recommendations_for_prob(p)
                 st.write("- " + "\n- ".join(recs))
@@ -829,18 +962,17 @@ def main():
                     with open(path, "rb") as f:
                         st.download_button("Download Report (HTML)", f, file_name=os.path.basename(path), mime="text/html")
 
-    # ---- Chatbot Interface
+    # ---- Chatbot Interface ----
     with tab2:
         chatbot_interface(artifacts)
 
-    # ---- Batch Processing
+    # ---- Batch Processing ----
     with tab3:
         uploaded_file = st.file_uploader("Upload CSV", type="csv")
         if uploaded_file is not None:
             results_df = process_batch_data(uploaded_file, artifacts)
             if results_df is not None:
                 st.success(f"Processed {len(results_df)} applications!")
-                # KPIs
                 high = int((results_df['Risk_Classification'] == "High Risk").sum())
                 low = int((results_df['Risk_Classification'] == "Low Risk").sum())
                 avg_p = float(results_df['Default_Probability'].mean())
@@ -849,18 +981,15 @@ def main():
                 c2.metric("Low Risk", f"{low}")
                 c3.metric("Avg Default Prob", f"{avg_p:.2%}")
 
-                # Charts
                 ch1, ch2 = st.columns(2)
                 with ch1:
                     st.plotly_chart(risk_pie(results_df), use_container_width=True)
                 with ch2:
                     st.plotly_chart(prob_hist(results_df), use_container_width=True)
 
-                # Log all rows
                 log_prediction(results_df[FEATURES_ORDER], results_df['Risk_Classification'].tolist())
 
-                # Drift
-                report_path = generate_drift_report(
+                report_path, report = generate_drift_report(
                     artifacts['reference_data'],
                     results_df[FEATURES_ORDER],
                     "batch_app"
@@ -876,7 +1005,6 @@ def main():
                 else:
                     st.info(f"Batch drift check skipped (need at least {MIN_DRIFT_ROWS} rows).")
 
-                # Results table + download
                 st.dataframe(results_df.sort_values('Default_Probability', ascending=False))
                 st.download_button(
                     "Download Predictions CSV",
@@ -885,7 +1013,7 @@ def main():
                     mime="text/csv"
                 )
 
-    # ---- Logs
+    # ---- Prediction Logs ----
     with tab4:
         st.subheader("Prediction Logs")
         log_file = "logs/predictions.log"
@@ -897,11 +1025,122 @@ def main():
         else:
             st.info("No logs yet. Make a prediction to start logging.")
 
-    # ---- Explainability (Global + Visuals in one place too)
+    # ---- Explainability ----
     with tab5:
         st.subheader("Global Explainability (No SHAP)")
         st.plotly_chart(plot_model_feature_importance(artifacts), use_container_width=True)
         st.caption("Tip: Choose two influential features and inspect the Risk Heatmap in the Single Application tab.")
+
+    # ---- Drift Monitoring ----
+    with tab6:
+        st.header("📊 Advanced Data Drift Monitoring")
+        
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            st.subheader("Data Drift Analysis")
+            st.info("Upload current data to compare against reference training data")
+        
+        with col2:
+            if st.button("🔄 Refresh Analysis", help="Refresh drift analysis with latest data"):
+                st.rerun()
+        
+        uploaded_drift_file = st.file_uploader(
+            "Upload current data for drift analysis", 
+            type="csv",
+            key="drift_uploader"
+        )
+        
+        if uploaded_drift_file:
+            current_data = pd.read_csv(uploaded_drift_file, nrows=MAX_CSV_ROWS)
+            current_data = _strip_aux_columns(current_data)
+            
+            st.success(f"Loaded {len(current_data)} records for drift analysis")
+            
+            report_path, report = generate_drift_report(
+                artifacts['reference_data'], 
+                current_data, 
+                "comprehensive_drift_report"
+            )
+            
+            if report_path:
+                drift_summary = generate_drift_summary(report)
+                st.markdown(drift_summary)
+                
+                st.subheader("Interactive Drift Analysis")
+                visualize_drift_metrics(artifacts['reference_data'], current_data, artifacts)
+                
+                with open(report_path, "rb") as f:
+                    st.download_button(
+                        "📥 Download Comprehensive Drift Report",
+                        f,
+                        file_name=os.path.basename(report_path),
+                        mime="text/html"
+                    )
+                
+                with st.expander("View Detailed Drift Report"):
+                    with open(report_path, "r", encoding="utf-8") as f:
+                        html = f.read()
+                    components.html(html, height=800, scrolling=True)
+            
+            if 'target_data' in artifacts and len(current_data) >= MIN_DRIFT_ROWS:
+                st.subheader("🎯 Target Drift Analysis")
+                
+                current_with_pred = current_data.copy()
+                probs = predict_default_probability(current_data, artifacts)
+                if probs is not None:
+                    current_with_pred['prediction'] = probs
+                    
+                    target_report_path, target_report = generate_target_drift_report(
+                        artifacts['reference_data'].assign(
+                            target=artifacts['target_data'].iloc[:, 0] if 'target_data' in artifacts else 0
+                        ),
+                        current_with_pred,
+                        'target' if 'target_data' in artifacts else None,
+                        "target_drift_report"
+                    )
+                    
+                    if target_report_path:
+                        with open(target_report_path, "rb") as f:
+                            st.download_button(
+                                "📥 Download Target Drift Report",
+                                f,
+                                file_name=os.path.basename(target_report_path),
+                                mime="text/html"
+                            )
+            
+            st.subheader("📈 Drift Monitoring Over Time")
+            
+            drift_reports = [f for f in os.listdir("drift_reports") if f.endswith('.html')]
+            if drift_reports:
+                drift_reports.sort(reverse=True)
+                selected_report = st.selectbox("Select historical report", drift_reports[:5])
+                
+                if selected_report:
+                    report_path = os.path.join("drift_reports", selected_report)
+                    with open(report_path, "rb") as f:
+                        st.download_button(
+                            "📥 Download Historical Report",
+                            f,
+                            file_name=selected_report,
+                            mime="text/html"
+                        )
+            else:
+                st.info("No historical drift reports found. Upload data to generate reports.")
+        
+        else:
+            st.info("👆 Upload a CSV file to begin drift analysis")
+            
+            st.subheader("Reference Data Statistics")
+            ref_stats = artifacts['reference_data'][NUMERICAL_FEATURES].describe()
+            st.dataframe(ref_stats.style.format("{:.2f}"))
+            
+            st.subheader("Reference Data Distributions")
+            selected_feature = st.selectbox("Select feature to view distribution", NUMERICAL_FEATURES)
+            
+            if selected_feature in artifacts['reference_data'].columns:
+                fig = px.histogram(artifacts['reference_data'], x=selected_feature, 
+                                  title=f"Distribution of {selected_feature} in Reference Data")
+                st.plotly_chart(fig, use_container_width=True)
 
 if __name__ == "__main__":
     try:
