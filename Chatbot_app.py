@@ -136,18 +136,38 @@ def main():
                     st.markdown(f"**You:** {entry['message']}")
         display_chat()
 
-        steps = [
-            ("Age","number"),("Income","number"),("LoanAmount","number"),("CreditScore","number"),
-            ("MonthsEmployed","number"),("NumCreditLines","number"),("InterestRate","number"),("LoanTerm","number"),
-            ("DTIRatio","number"),("Education","select",["High School","Bachelor's","Master's","PhD"]),
-            ("EmploymentType","select",["Full-time","Part-time","Self-employed","Unemployed"]),
+        # Group fields into categories for better organization
+        personal_info = [
+            ("Age","number"), 
+            ("Income","number"),
+            ("MaritalStatus","select",["Single","Married"]),
+            ("HasDependents","select",["No","Yes"])
+        ]
+        
+        loan_info = [
+            ("LoanAmount","number"),
+            ("LoanTerm","number"),
             ("LoanPurpose","select",["Business","Home","Education","Auto"]),
-            ("MaritalStatus","select",["Single","Married"]),("HasMortgage","select",["No","Yes"]),
-            ("HasDependents","select",["No","Yes"]),("HasCoSigner","select",["No","Yes"])
+            ("InterestRate","number")
+        ]
+        
+        financial_info = [
+            ("CreditScore","number"),
+            ("NumCreditLines","number"),
+            ("DTIRatio","number"),
+            ("HasMortgage","select",["No","Yes"])
+        ]
+        
+        employment_info = [
+            ("MonthsEmployed","number"),
+            ("EmploymentType","select",["Full-time","Part-time","Self-employed","Unemployed"]),
+            ("Education","select",["High School","Bachelor's","Master's","PhD"]),
+            ("HasCoSigner","select",["No","Yes"])
         ]
 
-        cols = st.columns(4)
-        for field in steps:
+        # Check which step we're on
+        all_steps = personal_info + loan_info + financial_info + employment_info
+        for field in all_steps:
             if field[0] not in st.session_state.user_data:
                 st.session_state.current_step = field
                 break
@@ -156,25 +176,77 @@ def main():
 
         if st.session_state.current_step:
             field = st.session_state.current_step
-            st.markdown(f"**Bot:** Hi! Please provide your {field[0]}")
-            col_idx = steps.index(field) % 4
-            if field[1]=="number":
-                value = cols[col_idx].number_input(field[0], value=0)
-            elif field[1]=="select":
-                value = cols[col_idx].selectbox(field[0], options=field[2])
-            if st.button("Submit", key=field[0]):
-                st.session_state.user_data[field[0]] = value
-                st.session_state.conversation.append({'sender':'user','message':str(value)})
-                st.session_state.conversation.append({'sender':'bot','message':f"{field[0]} recorded."})
-                st.experimental_rerun()
+            st.markdown(f"**Bot:** Please provide your {field[0]}")
+            
+            # Create a form for each category
+            with st.form(key='input_form'):
+                cols = st.columns(4)
+                
+                # Personal Information
+                with cols[0]:
+                    st.subheader("Personal Info")
+                    for f in personal_info:
+                        if f[1] == "number":
+                            value = st.number_input(f[0], value=0, key=f"input_{f[0]}")
+                        else:
+                            value = st.selectbox(f[0], options=f[2], key=f"input_{f[0]}")
+                        if f[0] not in st.session_state.user_data:
+                            st.session_state.user_data[f[0]] = value
+                
+                # Loan Information
+                with cols[1]:
+                    st.subheader("Loan Info")
+                    for f in loan_info:
+                        if f[1] == "number":
+                            value = st.number_input(f[0], value=0, key=f"input_{f[0]}")
+                        else:
+                            value = st.selectbox(f[0], options=f[2], key=f"input_{f[0]}")
+                        if f[0] not in st.session_state.user_data:
+                            st.session_state.user_data[f[0]] = value
+                
+                # Financial Information
+                with cols[2]:
+                    st.subheader("Financial Info")
+                    for f in financial_info:
+                        if f[1] == "number":
+                            value = st.number_input(f[0], value=0, key=f"input_{f[0]}")
+                        else:
+                            value = st.selectbox(f[0], options=f[2], key=f"input_{f[0]}")
+                        if f[0] not in st.session_state.user_data:
+                            st.session_state.user_data[f[0]] = value
+                
+                # Employment Information
+                with cols[3]:
+                    st.subheader("Employment Info")
+                    for f in employment_info:
+                        if f[1] == "number":
+                            value = st.number_input(f[0], value=0, key=f"input_{f[0]}")
+                        else:
+                            value = st.selectbox(f[0], options=f[2], key=f"input_{f[0]}")
+                        if f[0] not in st.session_state.user_data:
+                            st.session_state.user_data[f[0]] = value
+                
+                if st.form_submit_button("Submit All Information"):
+                    for field in all_steps:
+                        st.session_state.conversation.append({
+                            'sender': 'user',
+                            'message': f"{field[0]}: {st.session_state.user_data[field[0]]}"
+                        })
+                    st.session_state.conversation.append({
+                        'sender': 'bot',
+                        'message': "All information recorded. Calculating your results..."
+                    })
+                    st.experimental_rerun()
         else:
             st.markdown("**Bot:** Thank you! Here's your loan default dashboard...")
             df_input = pd.DataFrame([st.session_state.user_data])
             prob = predict_default_probability(df_input, artifacts)[0]
             risk = "High Risk" if prob>=0.5 else "Low Risk"
 
-            st.metric("Probability of Default", f"{prob:.2%}")
-            st.metric("Risk Classification", risk)
+            col1, col2 = st.columns(2)
+            col1.metric("Probability of Default", f"{prob:.2%}")
+            col2.metric("Risk Classification", risk)
+            
             st.plotly_chart(plot_gauge(prob), use_container_width=True)
             st.plotly_chart(plot_probability_bar(prob), use_container_width=True)
 
