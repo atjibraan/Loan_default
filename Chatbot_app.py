@@ -1,4 +1,3 @@
-# chatbot_loan_default_dashboard_gamified.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -92,36 +91,24 @@ def plot_risk_pie(df):
     return fig
 
 # ===== Suggestion Engine =====
-def generate_suggestions(user_data, prob):
+def generate_suggestions(data, prob):
     tips = []
     contributions = []
-
-    income = float(user_data.get('Income', 0))
-    dti = float(user_data.get('DTIRatio', 0))
-    loan_amt = float(user_data.get('LoanAmount', 0))
-
-    if income < 30000:
-        tips.append("💡 Hey! I noticed your income is a bit low. Consider providing a co-signer or increasing your income to improve approval chances 🙂")
+    if data['Income'] < 30000:
+        tips.append("💡 Consider increasing your income or providing a co-signer.")
         contributions.append("low Income")
-    if dti > 0.4:
-        tips.append("💡 Your DTI (Debt-to-Income) ratio is high; reducing debt or negotiating interest rate could help lower your risk.")
+    if data['DTIRatio'] > 0.4:
+        tips.append("💡 Your DTI is high; consider reducing debt or negotiating interest rate.")
         contributions.append("high DTI")
-    if loan_amt > income * 5:
-        tips.append("💡 Your LoanAmount is high relative to your income; either reduce the loan size or increase income for better chances.")
+    if data['LoanAmount'] > data['Income']*5:
+        tips.append("💡 Your LoanAmount is high relative to income; reduce loan size or improve income.")
         contributions.append("high LoanAmount")
-    
     if contributions:
-        contribution_text = ", ".join(contributions)
-        tips.insert(0, f"⚠️ Key factors contributing to your risk: {contribution_text}")
-    
-    if prob >= 0.5:
-        tips.append("🚀 Suggested Actions: Increase income, reduce existing debt, consider a co-signer, or negotiate loan terms.")
-    else:
-        tips.append("✅ You’re in a good position! Keep maintaining healthy finances to stay low risk.")
-
+        contribution_text = ' and '.join(contributions)
+        tips.insert(0,f"⚠️ Key factors contributing to risk: {contribution_text}")
     return tips
 
-# ===== Chatbot + Batch App with Gamified Risk Adjustment =====
+# ===== Chatbot + Batch App =====
 def main():
     st.set_page_config(page_title="Loan Default Chatbot Dashboard", layout="wide")
     st.title("💬 Loan Default Chatbot Dashboard")
@@ -136,7 +123,7 @@ def main():
 
     # ===== Single Applicant =====
     with tab1:
-        st.subheader("Multi-turn Chatbot with Gamified Risk Score")
+        st.subheader("Multi-turn Chatbot")
         if 'conversation' not in st.session_state:
             st.session_state.conversation = []
             st.session_state.user_data = {}
@@ -150,24 +137,16 @@ def main():
         display_chat()
 
         steps = [
-            ("Age","number"),
-            ("Income","number"),
-            ("LoanAmount","number"),
-            ("CreditScore","number"),
-            ("MonthsEmployed","number"),
-            ("NumCreditLines","number"),
-            ("InterestRate","number"),
-            ("LoanTerm","number"),
-            ("DTIRatio","number"),
-            ("Education","select",["High School","Bachelor's","Master's","PhD"]),
+            ("Age","number"),("Income","number"),("LoanAmount","number"),("CreditScore","number"),
+            ("MonthsEmployed","number"),("NumCreditLines","number"),("InterestRate","number"),("LoanTerm","number"),
+            ("DTIRatio","number"),("Education","select",["High School","Bachelor's","Master's","PhD"]),
             ("EmploymentType","select",["Full-time","Part-time","Self-employed","Unemployed"]),
             ("LoanPurpose","select",["Business","Home","Education","Auto"]),
-            ("MaritalStatus","select",["Single","Married"]),
-            ("HasMortgage","select",["No","Yes"]),
-            ("HasDependents","select",["No","Yes"]),
-            ("HasCoSigner","select",["No","Yes"])
+            ("MaritalStatus","select",["Single","Married"]),("HasMortgage","select",["No","Yes"]),
+            ("HasDependents","select",["No","Yes"]),("HasCoSigner","select",["No","Yes"])
         ]
 
+        cols = st.columns(4)
         for field in steps:
             if field[0] not in st.session_state.user_data:
                 st.session_state.current_step = field
@@ -178,17 +157,18 @@ def main():
         if st.session_state.current_step:
             field = st.session_state.current_step
             st.markdown(f"**Bot:** Hi! Please provide your {field[0]}")
+            col_idx = steps.index(field) % 4
             if field[1]=="number":
-                value = st.number_input(field[0], value=0)
+                value = cols[col_idx].number_input(field[0], value=0)
             elif field[1]=="select":
-                value = st.selectbox(field[0], options=field[2])
+                value = cols[col_idx].selectbox(field[0], options=field[2])
             if st.button("Submit", key=field[0]):
                 st.session_state.user_data[field[0]] = value
                 st.session_state.conversation.append({'sender':'user','message':str(value)})
                 st.session_state.conversation.append({'sender':'bot','message':f"{field[0]} recorded."})
                 st.experimental_rerun()
         else:
-            st.markdown("**Bot:** Thank you! Here’s your loan default dashboard...")
+            st.markdown("**Bot:** Thank you! Here's your loan default dashboard...")
             df_input = pd.DataFrame([st.session_state.user_data])
             prob = predict_default_probability(df_input, artifacts)[0]
             risk = "High Risk" if prob>=0.5 else "Low Risk"
@@ -198,31 +178,16 @@ def main():
             st.plotly_chart(plot_gauge(prob), use_container_width=True)
             st.plotly_chart(plot_probability_bar(prob), use_container_width=True)
 
-            # Suggestions
+            # Generate actionable suggestions
             tips = generate_suggestions(st.session_state.user_data, prob)
             for tip in tips:
-                if "⚠️" in tip or "💡" in tip or "🚀" in tip:
-                    st.warning(tip) if "⚠️" in tip else st.info(tip)
+                if "⚠️" in tip:
+                    st.warning(tip)
                 else:
-                    st.success(tip)
+                    st.info(tip)
 
-            # ===== Gamified Risk Adjustment =====
-            st.subheader("Try Adjusting Your Inputs to Improve Risk Score")
-            adjusted_income = st.number_input("Adjust Income", value=float(st.session_state.user_data.get('Income',0)))
-            adjusted_loan = st.number_input("Adjust LoanAmount", value=float(st.session_state.user_data.get('LoanAmount',0)))
-            adjusted_dti = st.number_input("Adjust DTIRatio", value=float(st.session_state.user_data.get('DTIRatio',0)))
-
-            adjusted_data = st.session_state.user_data.copy()
-            adjusted_data['Income'] = adjusted_income
-            adjusted_data['LoanAmount'] = adjusted_loan
-            adjusted_data['DTIRatio'] = adjusted_dti
-
-            adj_prob = predict_default_probability(pd.DataFrame([adjusted_data]), artifacts)[0]
-            adj_risk = "High Risk" if adj_prob>=0.5 else "Low Risk"
-            st.metric("Adjusted Probability of Default", f"{adj_prob:.2%}")
-            st.metric("Adjusted Risk Classification", adj_risk)
-            st.plotly_chart(plot_gauge(adj_prob), use_container_width=True)
-            st.plotly_chart(plot_probability_bar(adj_prob), use_container_width=True)
+            st.subheader("Applicant Overview")
+            st.dataframe(df_input)
 
     # ===== Batch Upload =====
     with tab2:
