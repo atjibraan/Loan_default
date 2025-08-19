@@ -1,4 +1,3 @@
-# chatbot_loan_default_advanced.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,9 +7,6 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler, OrdinalEncoder
 import plotly.graph_objects as go
-from io import BytesIO
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
 
 # ===== Configuration =====
 MODEL_PATH = 'loan_default_model.pkl'
@@ -19,6 +15,7 @@ DEVELOPER_NAME = "Jibraan Attar"
 MODEL_VERSION = "2.0"
 MODEL_TRAIN_DATE = "2025-07-29"
 MAX_CSV_ROWS = 2000000
+
 NUMERICAL_FEATURES = ['Age','Income','LoanAmount','CreditScore','MonthsEmployed','NumCreditLines','InterestRate','LoanTerm','DTIRatio']
 CATEGORICAL_FEATURES = ['Education','EmploymentType','LoanPurpose']
 BINARY_FEATURES = ['MaritalStatus','HasMortgage','HasDependents','HasCoSigner']
@@ -93,56 +90,30 @@ def plot_risk_pie(df):
     fig.update_layout(title="Risk Distribution")
     return fig
 
-# ===== Generate PDF Report =====
-def generate_pdf(user_data, prob, risk, suggestions):
-    buffer = BytesIO()
-    c = canvas.Canvas(buffer, pagesize=letter)
-    width, height = letter
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(50, height-50, "Loan Default Report")
-    c.setFont("Helvetica", 12)
-    c.drawString(50, height-80, f"Probability of Default: {prob:.2%}")
-    c.drawString(50, height-100, f"Risk Classification: {risk}")
-    c.drawString(50, height-130, "User Inputs:")
-    y = height-150
-    for key, value in user_data.items():
-        c.drawString(60, y, f"{key}: {value}")
-        y -= 20
-    c.drawString(50, y-10, "Suggestions & Risk Factors:")
-    y -= 30
-    for s in suggestions:
-        c.drawString(60, y, f"- {s}")
-        y -= 20
-    c.showPage()
-    c.save()
-    buffer.seek(0)
-    return buffer
-
-# ===== Conditional Suggestions =====
-def get_suggestions(user_data, prob):
-    suggestions = []
-    factors = []
-    # Example: high LoanAmount / low Income
-    if user_data['LoanAmount'] > user_data['Income']*0.8:
-        factors.append(f"High LoanAmount vs Income")
-        suggestions.append("Consider reducing loan amount or providing a co-signer.")
-    if user_data['DTIRatio'] > 0.4:
-        factors.append("High DTI ratio")
-        suggestions.append("Pay down debts or negotiate interest rate to lower DTI.")
-    if user_data['Income'] < 20000:
-        factors.append("Low Income")
-        suggestions.append("Boost income or savings for higher approval chance.")
-    if user_data['CreditScore'] < 600:
-        factors.append("Low Credit Score")
-        suggestions.append("Work on building credit history and timely payments.")
-    return suggestions, factors
+# ===== Suggestion Engine =====
+def generate_suggestions(data, prob):
+    tips = []
+    contributions = []
+    if data['Income'] < 30000:
+        tips.append("💡 Consider increasing your income or providing a co-signer.")
+        contributions.append("low Income")
+    if data['DTIRatio'] > 0.4:
+        tips.append("💡 Your DTI is high; consider reducing debt or negotiating interest rate.")
+        contributions.append("high DTI")
+    if data['LoanAmount'] > data['Income']*5:
+        tips.append("💡 Your LoanAmount is high relative to income; reduce loan size or improve income.")
+        contributions.append("high LoanAmount")
+    if contributions:
+        contribution_text = " and ".join(contributions)
+        tips.insert(0,f"⚠️ Key factors contributing to risk: {contribution_text}")
+    return tips
 
 # ===== Chatbot + Batch App =====
 def main():
-    st.set_page_config(page_title="Advanced Loan Default Chatbot", layout="wide")
-    st.title("💬 Advanced Loan Default Chatbot & Batch Predictor")
+    st.set_page_config(page_title="Loan Default Chatbot Dashboard", layout="wide")
+    st.title("💬 Loan Default Chatbot Dashboard")
     artifacts = load_artifacts()
-    
+
     st.sidebar.header("Developer & Model Info")
     st.sidebar.markdown(f"**Developer:** {DEVELOPER_NAME}")
     st.sidebar.markdown(f"**Model Version:** {MODEL_VERSION}")
@@ -152,7 +123,7 @@ def main():
 
     # ===== Single Applicant =====
     with tab1:
-        st.subheader("Interactive Multi-turn Chatbot")
+        st.subheader("Multi-turn Chatbot")
         if 'conversation' not in st.session_state:
             st.session_state.conversation = []
             st.session_state.user_data = {}
@@ -193,7 +164,7 @@ def main():
 
         if st.session_state.current_step:
             field = st.session_state.current_step
-            st.markdown(f"**Bot:** Hey! Could you tell me your {field[0]}?")
+            st.markdown(f"**Bot:** Hi! Please provide your {field[0]}")
             if field[1]=="number":
                 value = st.number_input(field[0], value=0)
             elif field[1]=="select":
@@ -204,27 +175,26 @@ def main():
                 st.session_state.conversation.append({'sender':'bot','message':f"{field[0]} recorded."})
                 st.experimental_rerun()
         else:
-            st.markdown("**Bot:** Thank you! Generating your personalized loan default report...")
+            st.markdown("**Bot:** Thank you! Generating your loan default dashboard...")
             df_input = pd.DataFrame([st.session_state.user_data])
             prob = predict_default_probability(df_input, artifacts)[0]
             risk = "High Risk" if prob>=0.5 else "Low Risk"
-            suggestions, factors = get_suggestions(st.session_state.user_data, prob)
-            
+
             st.metric("Probability of Default", f"{prob:.2%}")
             st.metric("Risk Classification", risk)
             st.plotly_chart(plot_gauge(prob), use_container_width=True)
             st.plotly_chart(plot_probability_bar(prob), use_container_width=True)
-            
-            # Conversational tips
-            for s in suggestions:
-                st.info(f"💡 Tip: {s}")
 
-            # Downloadable PDF
-            pdf_buffer = generate_pdf(st.session_state.user_data, prob, risk, suggestions)
-            st.download_button("Download Personalized PDF Report", data=pdf_buffer, file_name="loan_report.pdf", mime="application/pdf")
-            
-            # CSV fallback
-            st.download_button("Download CSV Report", data=df_input.to_csv(index=False).encode('utf-8'), file_name="loan_report.csv")
+            # Generate actionable suggestions
+            tips = generate_suggestions(st.session_state.user_data, prob)
+            for tip in tips:
+                if "⚠️" in tip:
+                    st.warning(tip)
+                else:
+                    st.info(tip)
+
+            st.subheader("Applicant Overview")
+            st.dataframe(df_input)
 
     # ===== Batch Upload =====
     with tab2:
@@ -248,6 +218,6 @@ if __name__=="__main__":
     try:
         main()
     except Exception as e:
-        st.error("Critical error occurred!")
+        st.error("Critical error!")
         with st.expander("Error details"):
             st.code(traceback.format_exc())
