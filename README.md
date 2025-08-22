@@ -5,7 +5,8 @@ This is a Streamlit web app that predicts the likelihood of a loan applicant def
 ## 🚀 Demo
 
 Try the app live (hosted on [Streamlit Cloud](https://streamlit.io/)  
-🔗 [Live App](https://loandefault-fsevxgxwbtrm7gevfzcgfe.streamlit.app/)
+
+🔗Access the web app through https://loandefault-btgh442a3isuenacuailgb.streamlit.app/
 
 ---
 
